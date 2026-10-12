@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SnapDiff</title>
+  <style>
+    /* Critical first-frame styles: available before external CSS arrives. */
+    html { color-scheme: dark; background: #0d1219; }
+    body { margin: 0; background: #0d1219; }
+    .startup-screen { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; background: #0d1219; color: #e6edf5; font-family: "Segoe UI", "Microsoft YaHei", sans-serif; }
+    .startup-screen[hidden] { display: none; }
+  </style>
+  <link rel="stylesheet" href="./styles.css" />
+  <script defer src="./core.js"></script>
+  <script defer src="./results.js"></script>
+  <script defer src="./history.js"></script>
+  <script defer src="./app.js"></script>
+</head>
+<body>
+  <div id="startup-screen" class="startup-screen" role="status" aria-live="polite">
+    <div class="startup-content"><span class="brand-mark startup-mark" aria-hidden="true">S</span><strong>SnapDiff</strong><span class="startup-caption"><span class="startup-spinner" aria-hidden="true"></span>正在读取目录记录…</span></div>
+  </div>
+  <div class="app-shell" inert aria-busy="true">
+    <header class="topbar">
+      <button id="brand-home" class="brand" aria-label="返回目录列表"><span class="brand-mark">S</span><span><strong>SnapDiff</strong><small>目录状态 · 时间节点 · 差异</small></span></button>
+      <div class="topbar-right"><span class="local-badge"><span class="dot"></span> 本地记录</span><span class="version">0.2.5</span></div>
+    </header>
+    <div id="app-error" class="notice error hidden" role="alert"></div>
+    <main>
+      <section id="home-view" class="view active">
+        <div class="hero">
+          <div><p class="eyebrow">YOUR DIRECTORIES, OVER TIME</p><h1>看清目录的每一次变化</h1><p class="subtitle">选一个目录，留下一个时间节点。之后随时检查它的变化。</p></div>
+          <button id="new-snapshot-btn" class="button primary">＋ 创建快照</button>
+        </div>
+        <div class="section-heading"><div><h2>我的目录 <span id="directory-count" class="muted"></span></h2><p>每个目录拥有独立的历史与比较基准</p></div><div class="actions"><button id="import-btn" class="button secondary small">导入快照数据</button><button id="export-all-btn" class="button secondary small">导出全部</button><button id="refresh-btn" class="icon-button" aria-label="刷新目录列表">↻</button></div></div>
+        <div id="directory-list" class="directory-list"><div class="empty">正在读取目录…</div></div>
+        <p class="footnote">也可将一个文件夹拖入此页，配置忽略规则后再开始扫描。只记录状态，不保存文件内容。</p>
+      </section>
+
+      <section id="workspace-view" class="view">
+        <button id="back-btn" class="back-link">← 我的目录</button>
+        <div class="workspace-heading"><div class="heading-text"><p class="eyebrow">DIRECTORY WORKSPACE</p><h1 id="directory-name"></h1><p id="directory-path" class="subtitle path"></p></div><div class="actions"><button id="settings-btn" class="button secondary">目录设置</button><button id="check-btn" class="button secondary">检查变化</button><button id="capture-btn" class="button primary">更新快照</button></div></div>
+        <div id="directory-warning" class="notice hidden"></div>
+        <div id="update-notice" class="notice success hidden"></div>
+        <div class="comparison-bar panel">
+          <button id="baseline-btn" class="time-side baseline-side"><span class="field-label">比较基准 <span class="link-hint">更换时间节点 ↗</span></span><strong id="baseline-time">请选择历史节点</strong><span id="baseline-meta" class="muted"></span></button>
+          <span class="comparison-arrow">→</span>
+          <label class="time-side"><span class="field-label">对照状态</span><select id="target-select" aria-label="选择对照状态"></select><span id="target-meta" class="muted"></span></label>
+          <button id="compare-btn" class="button secondary">查看差异</button>
+        </div>
+        <div id="comparison-hint" class="comparison-hint"></div>
+        <div id="scope-warning" class="notice hidden"></div>
+        <div id="diff-section" class="hidden">
+          <div id="diff-counts" class="metrics"></div>
+          <div class="result-toolbar">
+            <input id="result-search" type="search" placeholder="搜索文件名或路径…" aria-label="搜索差异文件" />
+            <div class="segmented"><button id="list-mode" class="selected">文件列表</button><button id="tree-mode">目录树</button></div>
+            <select id="result-sort" aria-label="排序方式"><option value="path">按路径</option><option value="size">按大小变化</option><option value="time">按修改时间</option><option value="focus">关注项优先</option></select>
+            <button id="report-btn" class="button secondary small">文字报告</button>
+          </div>
+          <div class="filter-toolbar"><div class="actions"><label class="check-label"><input id="include-metadata" type="checkbox" /> 显示仅元数据变化</label><label class="check-label"><input id="focused-only" type="checkbox" /> 仅重点关注</label></div><button id="copy-all-btn" class="text-button">复制全部筛选路径</button></div>
+          <div id="tree-breadcrumb" class="breadcrumb hidden"></div>
+          <div class="result-panel panel"><div class="result-heading"><span>状态 / 路径</span><span>大小变化</span></div><div id="diff-list"></div></div>
+          <div class="pagination"><span id="result-total" class="muted"></span><div class="actions"><button id="prev-page" class="button secondary small">上一页</button><span id="page-label" class="muted"></span><button id="next-page" class="button secondary small">下一页</button></div></div>
+        </div>
+        <div id="workspace-empty" class="empty">选择历史基准，然后检查当前目录或选择另一个历史节点。</div>
+        <details class="stats-panel panel"><summary>目录统计 <span id="stats-summary" class="muted"></span></summary><div id="type-stats" class="type-stats"></div></details>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="create-modal" class="modal-card">
+    <form id="create-form">
+      <div class="modal-header"><div><p class="eyebrow">FIRST TIME NODE</p><h2>创建目录快照</h2></div><button type="button" class="close-button" data-close="create-modal" aria-label="关闭">×</button></div>
+      <p class="modal-description">选择目录即可，名称自动取自文件夹。已有目录请使用“更新快照”。</p>
+      <label>目录路径<div class="path-input"><input id="root-path" required placeholder="选择要记录状态的目录" /><button id="browse-btn" type="button" class="button secondary">选择目录</button></div></label>
+      <label>额外忽略规则 <span class="muted">（可选，每行一条）</span><textarea id="ignore-patterns" rows="4" placeholder="*.log&#10;cache/&#10;temp/"></textarea></label>
+      <p class="footnote">目录根部的 .snapshotignore 会自动读取，支持通配符、目录规则和 ! 排除例外。</p>
+      <div class="modal-actions"><button type="button" class="button secondary" data-close="create-modal">取消</button><button id="create-btn" type="submit" class="button primary">开始扫描并保存</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="history-modal" class="modal-card history-card">
+    <div class="modal-header"><div><p class="eyebrow">TIME NODES</p><h2>更换时间节点</h2><p id="history-root" class="modal-description"></p></div><button class="close-button" data-close="history-modal" aria-label="关闭">×</button></div>
+    <div class="activity-heading"><span>最近 120 天</span><button id="clear-day" class="text-button hidden">显示全部日期</button></div>
+    <div id="activity-wall" class="activity-wall"></div>
+    <p id="activity-description" class="footnote">空格表示未观察；颜色表示手动扫描发现的差异，按次累计。圆点表示保存过快照。</p>
+    <div class="history-toolbar"><span id="history-count" class="muted"></span><label class="check-label"><input id="select-all-nodes" type="checkbox" /> 选择当前列表</label></div>
+    <div id="history-list" class="history-list"></div>
+    <div class="history-footer"><span id="history-selection-count" class="muted">未选中节点</span><div class="actions"><button id="export-nodes-btn" class="button secondary small" disabled>导出选中</button><button id="delete-nodes-btn" class="button danger small" disabled>删除选中</button></div></div>
+  </dialog>
+
+  <dialog id="settings-modal" class="modal-card">
+    <form id="settings-form">
+      <div class="modal-header"><div><p class="eyebrow">DIRECTORY SETTINGS</p><h2>目录设置</h2></div><button type="button" class="close-button" data-close="settings-modal" aria-label="关闭">×</button></div>
+      <label>额外忽略规则<textarea id="settings-ignore" rows="4" placeholder="*.log&#10;cache/"></textarea></label>
+      <p class="footnote">与目录中的 .snapshotignore 一起生效。新规则用于之后的扫描，已有快照保持原样。</p>
+      <label>重点关注规则<textarea id="settings-focus" rows="3" placeholder="/bin/plugin.dll&#10;mods/&#10;*.ini"></textarea></label>
+      <p class="footnote">只影响结果筛选与标记，不自动监控文件。</p>
+      <label>历史保留<select id="retention-mode"><option value="all">保留全部</option><option value="latest">仅保留最近一次</option><option value="custom">保留最近 N 次</option></select></label>
+      <label id="retention-number-field" class="hidden">保留数量<input id="retention-number" type="number" min="1" max="100000" value="10" /></label>
+      <div class="settings-bottom"><button id="export-directory-btn" type="button" class="text-button">导出目录全部历史</button><button id="delete-directory-btn" type="button" class="text-button danger-text">移除目录记录</button></div>
+      <div class="modal-actions"><button type="button" class="button secondary" data-close="settings-modal">取消</button><button id="save-settings-btn" type="submit" class="button primary">保存设置</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="remark-modal" class="modal-card">
+    <form id="remark-form"><div class="modal-header"><h2>时间节点备注</h2><button type="button" class="close-button" data-close="remark-modal" aria-label="关闭">×</button></div><p id="remark-time" class="modal-description"></p><label>备注 <span class="muted">（可选）</span><textarea id="remark-text" rows="3" maxlength="500" placeholder="例如：调整配置后"></textarea></label><div class="modal-actions"><button type="button" class="button secondary" data-close="remark-modal">取消</button><button type="submit" class="button primary">保存备注</button></div></form>
+  </dialog>
+
+  <dialog id="report-modal" class="modal-card report-card">
+    <div class="modal-header"><div><h2>文字报告</h2><p class="modal-description">包含当前筛选条件下的全部分页结果</p></div><button class="close-button" data-close="report-modal" aria-label="关闭">×</button></div>
+    <textarea id="report-text" readonly rows="16" aria-label="差异报告"></textarea><div class="modal-actions"><button id="copy-report-btn" class="button secondary">复制报告</button><button id="save-report-btn" class="button primary">保存为文本文件</button></div>
+  </dialog>
+
+  <dialog id="confirm-modal" class="modal-card confirm-card">
+    <div class="modal-header"><h2 id="confirm-title"></h2><button id="confirm-close" class="close-button" aria-label="关闭">×</button></div><p id="confirm-message" class="confirm-message"></p><pre id="confirm-details" class="confirm-details hidden"></pre><div class="modal-actions"><button id="confirm-no" class="button secondary">取消</button><button id="confirm-yes" class="button primary">确认</button></div>
+  </dialog>
+
+  <section id="scan-panel" class="scan-panel hidden" aria-label="扫描进度" aria-live="polite">
+    <div class="scan-top"><div><strong id="scan-title">正在扫描</strong><span id="progress-text"></span></div><div class="actions"><span id="progress-percent"></span><button id="cancel-scan-btn" class="button danger small">取消扫描</button><button id="retry-scan-btn" class="button secondary small hidden">重试</button><button id="dismiss-scan-btn" class="icon-button hidden" aria-label="关闭进度">×</button></div></div>
+    <div class="progress-track"><div id="progress-bar" class="progress-bar"></div></div><div id="current-file" class="current-file"></div>
+  </section>
+  <div id="toast" class="toast" role="status"></div>
+</body>
+</html>

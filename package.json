@@ -1,0 +1,13 @@
+{
+  "name": "snapdiff",
+  "version": "0.2.5",
+  "private": true,
+  "scripts": {
+    "tauri": "tauri",
+    "test": "node --test tests/frontend.test.cjs"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "jsdom": "^30.1.2"
+  }
+}
