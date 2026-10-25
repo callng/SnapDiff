@@ -206,6 +206,7 @@ fn run_scan(
         }
     };
     let root = PathBuf::from(&config.root_path);
+    lock(&backend.store)?.ensure_database_outside_root(&root)?;
     if !root.is_dir() {
         return Err("目录不存在或不可访问；已有历史仍可离线比较".into());
     }
@@ -359,7 +360,7 @@ pub async fn compare_states(
     let backend = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let comparison = {
-            let store = lock(&backend.store)?;
+            let mut store = lock(&backend.store)?;
             let config = store.config(&directory_id)?;
             store.ensure_saved_node(&directory_id, &old_id)?;
             let next = match &new_id {
@@ -530,8 +531,20 @@ pub async fn get_report(
 #[tauri::command]
 pub async fn get_storage_info(state: State<'_, Backend>) -> Result<serde_json::Value, String> {
     let backend = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || Ok(lock(&backend.store)?.storage_info()))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn migrate_database(
+    state: State<'_, Backend>,
+    directory: String,
+) -> Result<serde_json::Value, String> {
+    let backend = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        Ok(serde_json::json!({ "warnings": lock(&backend.store)?.warnings.clone() }))
+        let _guard = backend.scan.idle_guard()?;
+        lock(&backend.store)?.migrate_to(Path::new(&directory))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -544,6 +557,7 @@ fn validate_new_directory(store: &Store, path: &str) -> Result<(), String> {
     if store.find_root(&storage::root_key(path))?.is_some() {
         return Err("该目录已经存在，请使用对应目录的更新按钮".into());
     }
+    store.ensure_database_outside_root(Path::new(path))?;
     Ok(())
 }
 

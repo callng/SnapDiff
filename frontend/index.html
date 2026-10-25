@@ -24,7 +24,7 @@
   <div class="app-shell" inert aria-busy="true">
     <header class="topbar">
       <button id="brand-home" class="brand" aria-label="返回目录列表"><span class="brand-mark">S</span><span><strong>SnapDiff</strong><small>目录状态 · 时间节点 · 差异</small></span></button>
-      <div class="topbar-right"><span class="local-badge"><span class="dot"></span> 本地记录</span><span class="version">0.2.5</span></div>
+      <div class="topbar-right"><button id="storage-btn" class="button secondary small">数据库位置</button><span class="local-badge"><span class="dot"></span> 本地记录</span><span class="version">0.2.6</span></div>
     </header>
     <div id="app-error" class="notice error hidden" role="alert"></div>
     <main>
@@ -112,6 +112,18 @@
   <dialog id="report-modal" class="modal-card report-card">
     <div class="modal-header"><div><h2>文字报告</h2><p class="modal-description">包含当前筛选条件下的全部分页结果</p></div><button class="close-button" data-close="report-modal" aria-label="关闭">×</button></div>
     <textarea id="report-text" readonly rows="16" aria-label="差异报告"></textarea><div class="modal-actions"><button id="copy-report-btn" class="button secondary">复制报告</button><button id="save-report-btn" class="button primary">保存为文本文件</button></div>
+  </dialog>
+
+  <dialog id="storage-modal" class="modal-card">
+    <form id="storage-form">
+      <div class="modal-header"><h2>数据库位置</h2><button id="storage-close" type="button" class="close-button" data-close="storage-modal" aria-label="关闭">×</button></div>
+      <label>当前数据库</label><p id="storage-current" class="storage-path"></p>
+      <label>保存位置<select id="storage-mode"><option value="default">系统应用数据目录</option><option value="install">安装目录下的 data 文件夹</option><option value="custom">自选文件夹</option></select></label>
+      <label>目标文件夹<div class="path-input"><input id="storage-directory" readonly /><button id="storage-browse" type="button" class="button secondary">浏览…</button></div></label>
+      <p class="footnote">迁移包含全部目录记录、历史、设置和当前扫描状态。目标已有数据库时不会覆盖。</p>
+      <p id="storage-status" class="notice hidden" role="status" aria-live="polite"></p>
+      <div class="modal-actions"><button id="storage-cancel" type="button" class="button secondary" data-close="storage-modal">取消</button><button id="storage-migrate" type="submit" class="button primary">迁移数据库</button></div>
+    </form>
   </dialog>
 
   <dialog id="confirm-modal" class="modal-card confirm-card">

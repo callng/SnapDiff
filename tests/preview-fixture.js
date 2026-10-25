@@ -28,7 +28,8 @@
         case 'list_directories': return [clone(directory)];
         case 'get_directory': return clone(directory);
         case 'list_history': return clone(nodes);
-        case 'get_storage_info': return { warnings: [] };
+        case 'get_storage_info': return { warnings: [], mode: 'default', database_path: 'C:\\Demo\\SnapDiff\\snapdiff.sqlite3', directory: 'C:\\Demo\\SnapDiff', default_directory: 'C:\\Demo\\SnapDiff', install_directory: 'D:\\Demo\\SnapDiff\\data' };
+        case 'migrate_database': throw new Error('演示预览不会迁移实际数据库，请在桌面应用中操作');
         case 'get_activity': return clone(activity);
         case 'select_baseline': directory.baseline_id = args.snapshotId; return;
         case 'compare_states': return { id: 'demo-comparison', directory_id: directory.id, old: clone(nodes.find(n => n.id === args.oldId)), new: clone(nodes.find(n => n.id === args.newId) || nodes[0]), target_current: !args.newId, counts: { added: 3, deleted: 1, modified: 2, moved: 1, metadata: 1 }, size_delta: 240257, scope_changed: false, scope_unknown: false, excluded_scope_count: 0, directory_structure_available: true };

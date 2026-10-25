@@ -287,7 +287,7 @@ fn stress_many_files_and_history() {
     assert_eq!(store.overviews().unwrap()[0].history_count, 2);
     eprintln!("list_ms={:.3}", start.elapsed().as_secs_f64() * 1000.0);
     drop(store);
-    let store = storage::Store::open(data.path()).unwrap();
+    let mut store = storage::Store::open(data.path()).unwrap();
     let reopened = store.compare_states("old", "new", false, &[]).unwrap();
     assert_eq!(reopened.summary.counts.modified, count);
     eprintln!(

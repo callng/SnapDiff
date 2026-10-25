@@ -76,9 +76,9 @@ window.SD = (() => {
     const resolve = confirmation; confirmation = null;
     close('confirm-modal'); resolve(answer);
   }
-  async function chooseDirectory() {
+  async function chooseDirectory(title = '选择要记录状态的目录') {
     if (!window.__TAURI__?.dialog) throw new Error('无法打开目录选择器');
-    return window.__TAURI__.dialog.open({ directory: true, multiple: false, title: '选择要记录状态的目录' });
+    return window.__TAURI__.dialog.open({ directory: true, multiple: false, title });
   }
   async function chooseOpen() {
     if (!window.__TAURI__?.dialog) throw new Error('无法打开文件选择器');

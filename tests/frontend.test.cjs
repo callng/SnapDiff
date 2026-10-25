@@ -14,7 +14,7 @@ const summary = (id, time = '2026-10-12T01:00:00Z') => ({
 const older = summary('older', '2026-10-11T01:00:00Z'), latest = summary('latest');
 const entry = relative_path => ({ relative_path, kind: 'file', size: 1024, modified_time: latest.created_time, md5: 'a'.repeat(32) });
 
-async function app({ current = true, rowCount = 1, available = true, startupDirectoryRead, validateDroppedPath } = {}) {
+async function app({ current = true, rowCount = 1, available = true, startupDirectoryRead, validateDroppedPath, migrateDatabase } = {}) {
   const dom = new JSDOM(fs.readFileSync(path.join(root, 'frontend/index.html'), 'utf8'), { runScripts: 'outside-only', url: 'http://localhost' });
   const { window } = dom;
   await new Promise(resolve => window.document.readyState === 'loading' ? window.document.addEventListener('DOMContentLoaded', resolve, { once: true }) : resolve());
@@ -46,7 +46,10 @@ async function app({ current = true, rowCount = 1, available = true, startupDire
           if (startupDirectoryRead) await startupDirectoryRead({ window, calls });
           return clone(directories);
         case 'get_directory': return clone(directories.find(d => d.id === args.directoryId));
-        case 'get_storage_info': return { warnings: [] };
+        case 'get_storage_info': return { warnings: [], mode: 'default', database_path: 'C:/appdata/snapdiff.sqlite3', directory: 'C:/appdata', default_directory: 'C:/appdata', install_directory: 'C:/SnapDiff/data' };
+        case 'migrate_database':
+          if (migrateDatabase) return migrateDatabase(args.directory);
+          return { warnings: [], mode: 'custom', database_path: args.directory + '/snapdiff.sqlite3', directory: args.directory, default_directory: 'C:/appdata', install_directory: 'C:/SnapDiff/data', source_retained: false };
         case 'validate_directory_path':
           if (validateDroppedPath) return validateDroppedPath(args.path);
           return args.path;
@@ -107,6 +110,69 @@ async function app({ current = true, rowCount = 1, available = true, startupDire
   };
   return result;
 }
+
+test('database position selection is explicit and cancelling migration does not change records', async () => {
+  const a = await app();
+  try {
+    a.el('storage-btn').click(); await turn();
+    assert(a.el('storage-modal').open);
+    assert.equal(a.el('storage-current').textContent, 'C:/appdata/snapdiff.sqlite3');
+    assert.equal(a.calls.filter(c => c.cmd === 'scan_directory' || c.cmd === 'migrate_database').length, 0);
+    a.el('storage-mode').value = 'install'; a.el('storage-mode').dispatchEvent(new a.window.Event('change'));
+    assert.equal(a.el('storage-directory').value, 'C:/SnapDiff/data');
+    assert(a.el('storage-browse').disabled);
+    a.el('storage-form').dispatchEvent(new a.window.Event('submit', { cancelable: true })); await turn();
+    assert(a.el('confirm-modal').open);
+    assert.match(a.el('confirm-details').textContent, /C:\/SnapDiff\/data/);
+    a.el('confirm-no').click(); await turn();
+    assert.equal(a.calls.filter(c => c.cmd === 'migrate_database').length, 0);
+    assert(a.el('storage-modal').open);
+  } finally { a.close(); }
+});
+
+test('database migration blocks competing operations, survives failure and accepts a retry', async () => {
+  let resolveMigration, rejectMigration;
+  const a = await app({ migrateDatabase: () => new Promise((resolve, reject) => { resolveMigration = resolve; rejectMigration = reject; }) });
+  try {
+    a.el('storage-btn').click(); await turn();
+    a.el('storage-mode').value = 'custom'; a.el('storage-mode').dispatchEvent(new a.window.Event('change'));
+    a.window.__TAURI__.dialog.open = async () => 'D:/数据库 <folder>';
+    a.el('storage-browse').click(); await turn();
+    a.el('storage-form').dispatchEvent(new a.window.Event('submit', { cancelable: true })); await turn();
+    a.el('confirm-yes').click(); await turn();
+    assert.equal(a.calls.find(c => c.cmd === 'migrate_database').args.directory, 'D:/数据库 <folder>');
+    for (const id of ['new-snapshot-btn', 'import-btn', 'storage-close', 'storage-cancel', 'storage-mode', 'storage-browse']) assert(a.el(id).disabled, id);
+    assert.equal(a.el('storage-modal').dispatchEvent(new a.window.Event('cancel', { cancelable: true })), false);
+    await a.window.SD.app.startScan({ mode: 'capture', directoryId: 'dir' });
+    assert.equal(a.calls.filter(c => c.cmd === 'scan_directory').length, 0);
+    rejectMigration('目标数据库已存在'); await turn(); await turn();
+    assert.equal(a.el('storage-current').textContent, 'C:/appdata/snapdiff.sqlite3');
+    assert.match(a.el('storage-status').textContent, /迁移失败.*原数据库/);
+    assert.equal(a.el('new-snapshot-btn').disabled, false);
+    assert.equal(a.el('storage-migrate').disabled, false);
+    a.el('storage-form').dispatchEvent(new a.window.Event('submit', { cancelable: true })); await turn();
+    a.el('confirm-yes').click(); await turn();
+    resolveMigration({ warnings: [], directory: 'D:/数据库 <folder>', database_path: 'D:/数据库 <folder>/snapdiff.sqlite3', source_retained: false });
+    await turn(); await turn();
+    assert.equal(a.el('storage-current').textContent, 'D:/数据库 <folder>/snapdiff.sqlite3');
+    assert.equal(a.el('storage-current').children.length, 0);
+    assert.match(a.el('storage-status').textContent, /下次启动/);
+    assert.equal(a.el('storage-close').disabled, false);
+    assert.equal(a.calls.filter(c => c.cmd === 'scan_directory').length, 0);
+  } finally { a.close(); }
+});
+
+test('a running scan disables database relocation and leaves scan cancellation available', async () => {
+  const a = await app();
+  try {
+    const scanning = a.window.SD.app.startScan({ mode: 'capture', directoryId: 'dir' }); await turn();
+    assert(a.el('storage-btn').disabled);
+    assert.equal(a.el('cancel-scan-btn').disabled, false);
+    a.el('storage-btn').click(); await turn(); assert(!a.el('storage-modal').open);
+    a.el('cancel-scan-btn').click(); await scanning;
+    assert.equal(a.el('storage-btn').disabled, false);
+  } finally { a.close(); }
+});
 
 test('default context menus and browser file navigation are blocked throughout the page', async () => {
   const a = await app();

@@ -8,11 +8,13 @@ mod scanner;
 mod sql_diff;
 mod startup_window;
 mod storage;
+mod storage_location;
 #[cfg(test)]
 mod validation;
 
 use commands::*;
 use tauri::Manager;
+use tauri_plugin_dialog::DialogExt;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -43,7 +45,25 @@ pub fn run() {
         })
         .setup(|app| {
             let path = app.path().app_data_dir()?;
-            let store = storage::Store::open(&path).map_err(std::io::Error::other)?;
+            let config = app.path().app_config_dir()?;
+            let executable = std::env::current_exe()?;
+            let location = storage_location::StorageLocation::new(
+                &config,
+                path,
+                executable.parent().ok_or("安装目录无效")?,
+            );
+            let result =
+                tauri::async_runtime::block_on(tauri::async_runtime::spawn_blocking(move || {
+                    storage::Store::open_configured(location)
+                }))?;
+            let store = result.map_err(|error| {
+                app.dialog()
+                    .message(&error)
+                    .title("SnapDiff 数据库无法打开")
+                    .kind(tauri_plugin_dialog::MessageDialogKind::Error)
+                    .blocking_show();
+                std::io::Error::other(error)
+            })?;
             app.manage(Backend::new(store));
             Ok(())
         })
@@ -70,6 +90,7 @@ pub fn run() {
             preview_import,
             import_snapshots,
             get_storage_info,
+            migrate_database,
             validate_directory_path
         ])
         .run(tauri::generate_context!())

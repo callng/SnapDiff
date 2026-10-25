@@ -160,7 +160,7 @@ fn assert_queries(actual: &SqlComparison, reference: &Comparison) {
 #[test]
 fn sql_diff_matches_reference_filter_sort_tree_search_and_paging() {
     let (mut old, mut new) = snapshots();
-    let (_temp, store) = persisted(&mut old, &mut new);
+    let (_temp, mut store) = persisted(&mut old, &mut new);
     let focus = vec!["new/".into(), "中文/组/00*".into()];
     let reference = diff::compare(&old, &new, false, &focus).unwrap();
     let actual = store.compare_states("old", "new", false, &focus).unwrap();
@@ -228,7 +228,7 @@ fn changed_scope_legacy_structure_and_staged_scan_match_reference() {
             old.schema_version = 1;
             old.directory_entries_complete = false;
         }
-        let (_temp, store) = persisted(&mut old, &mut new);
+        let (_temp, mut store) = persisted(&mut old, &mut new);
         let reference = diff::compare(&old, &new, true, &[]).unwrap();
         let actual = store
             .compare_scan("old", &new, true, &[], Arc::new(AtomicBool::new(false)))
@@ -298,7 +298,7 @@ fn many_unique_moves_do_not_skip_rows_and_wide_tree_sum_does_not_overflow() {
     huge.size = i64::MAX as u64;
     new.files.extend([huge, file("huge/two", 1001)]);
     new.recalculate_stats().unwrap();
-    let (_temp, store) = persisted(&mut old, &mut new);
+    let (_temp, mut store) = persisted(&mut old, &mut new);
     let actual = store.compare_states("old", "new", false, &[]).unwrap();
     let reference = diff::compare(&old, &new, false, &[]).unwrap();
     assert_queries(&actual, &reference);
@@ -315,7 +315,7 @@ fn cancellation_interrupts_sql_and_cleans_staging_without_mutating_history() {
     );
     let mut new = old.clone();
     new.id = "new".into();
-    let (_temp, store) = persisted(&mut old, &mut new);
+    let (_temp, mut store) = persisted(&mut old, &mut new);
     let token = Arc::new(AtomicBool::new(false));
     let signal = token.clone();
     let worker = std::thread::spawn(move || {

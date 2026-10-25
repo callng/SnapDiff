@@ -121,6 +121,17 @@ fn modified_time(metadata: &Metadata) -> Result<DateTime<Utc>, String> {
         .map_err(|e| format!("无法读取修改时间: {e}"))
 }
 
+fn md5_hex(digest: impl AsRef<[u8]>) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let digest = digest.as_ref();
+    let mut result = String::with_capacity(digest.len() * 2);
+    for &byte in digest {
+        result.push(HEX[(byte >> 4) as usize] as char);
+        result.push(HEX[(byte & 15) as usize] as char);
+    }
+    result
+}
+
 fn md5_reader(
     mut reader: impl Read,
     cancel: &Arc<AtomicBool>,
@@ -142,7 +153,7 @@ fn md5_reader(
         report(processed);
     }
     cancelled(cancel)?;
-    Ok((format!("{:x}", digest.finalize()), processed))
+    Ok((md5_hex(digest.finalize()), processed))
 }
 
 fn stable_file(
@@ -286,7 +297,7 @@ pub fn scan_directory(
                     kind: *kind,
                     size: 0,
                     modified_time: modified_time(&metadata)?,
-                    md5: format!("{:x}", Md5::digest(target.as_bytes())),
+                    md5: md5_hex(Md5::digest(target.as_bytes())),
                 }
             }
         };
@@ -318,6 +329,10 @@ mod tests {
     fn streamed_hash_and_cancellation_between_chunks() {
         let cancel = Arc::new(AtomicBool::new(false));
         assert_eq!(
+            md5_reader(Cursor::new(b""), &cancel, |_| {}).unwrap().0,
+            "d41d8cd98f00b204e9800998ecf8427e"
+        );
+        assert_eq!(
             md5_reader(Cursor::new(b"abc"), &cancel, |_| {}).unwrap().0,
             "900150983cd24fb0d6963f7d28e17f72"
         );
@@ -328,6 +343,13 @@ mod tests {
         });
         assert_eq!(result.unwrap_err(), SCAN_CANCELLED);
         assert_eq!(bytes, 256 * 1024);
+    }
+    #[test]
+    fn hash_encoding_preserves_leading_zeroes_and_lowercase() {
+        assert_eq!(
+            md5_hex([0x00, 0x01, 0x0f, 0x10, 0xab, 0xff]),
+            "00010f10abff"
+        );
     }
     #[test]
     fn file_changed_during_hash_is_retried_with_fresh_metadata() {
@@ -360,10 +382,7 @@ mod tests {
         .unwrap();
         assert!(changed);
         assert_eq!(entry.size, original.len() as u64 + 1);
-        assert_eq!(
-            entry.md5,
-            format!("{:x}", Md5::digest(fs::read(path).unwrap()))
-        );
+        assert_eq!(entry.md5, md5_hex(Md5::digest(fs::read(path).unwrap())));
     }
     #[test]
     fn empty_directories_and_ignore_exceptions_are_captured() {

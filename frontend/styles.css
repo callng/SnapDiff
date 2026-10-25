@@ -178,6 +178,7 @@ details[open] > summary .detail-chevron { transform: rotate(180deg); }
 .modal-card label > input:not([type=checkbox]), .modal-card label > textarea, .modal-card label > select { display: block; width: 100%; margin-top: 9px; }
 .path-input { display: flex; gap: 8px; margin-top: 9px; }
 .path-input input { flex: 1; font-size: 12px; }
+.storage-path { overflow-wrap: anywhere; color: #d3e0f2; font-size: 12px; line-height: 1.6; }
 .modal-actions { display: flex; justify-content: end; gap: 9px; margin-top: 24px; }
 .history-card { width: min(820px, 92vw); }
 .history-card[open] { display: flex; flex-direction: column; overflow: hidden; }

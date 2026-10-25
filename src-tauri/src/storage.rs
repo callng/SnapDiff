@@ -1,3 +1,4 @@
+use crate::storage_location::{self, StorageLocation, DATABASE_NAME};
 use crate::{entry_codec, ignore::IgnoreMatcher, models::*, sql_diff::SqlComparison};
 use chrono::{Duration, Local, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -139,12 +140,68 @@ fn prune(conn: &Connection, config: &mut DirectoryConfig) -> Result<usize, Strin
 pub struct Store {
     conn: Connection,
     pub warnings: Vec<String>,
+    data_dir: PathBuf,
+    location: Option<StorageLocation>,
+    _database_lock: fs::File,
+    config_lock: Option<fs::File>,
 }
 
 impl Store {
     pub fn open(data_dir: &Path) -> Result<Self, String> {
-        fs::create_dir_all(data_dir).map_err(|e| format!("创建数据目录失败: {e}"))?;
-        let mut conn = sql(Connection::open(data_dir.join("snapdiff.sqlite3")))?;
+        Self::open_internal(data_dir, true)
+    }
+
+    pub fn open_configured(location: StorageLocation) -> Result<Self, String> {
+        let config_lock = storage_location::lock_file(
+            location.config_file.parent().ok_or("配置目录无效")?,
+            ".snapdiff-location.lock",
+        )?;
+        let saved = location.saved_directory()?;
+        if let Some(directory) = &saved {
+            if !directory.join(DATABASE_NAME).is_file() {
+                return Err(format!(
+                    "配置的数据库不存在或不可访问：{}。请重新连接该位置；不会自动创建空库。",
+                    directory.display()
+                ));
+            }
+        }
+        let directory = saved.as_deref().unwrap_or(&location.default_dir);
+        let default_location = root_key(directory.to_str().ok_or("数据库路径无效")?)
+            == root_key(location.default_dir.to_str().ok_or("数据库路径无效")?);
+        let mut store = if default_location {
+            Self::open(directory)?
+        } else {
+            Self::open_internal(directory, false)?
+        };
+        store.location = Some(location.clone());
+        store.config_lock = Some(config_lock);
+        if saved.is_none() {
+            // Preserve legacy history first, then migrate the complete SQLite store.
+            match location.installer_directory() {
+                Ok(Some(directory)) => {
+                    if let Err(error) = store.migrate_to(&directory) {
+                        store.warnings.push(format!(
+                            "安装时选择的数据库位置未生效，继续使用原位置：{error}"
+                        ));
+                        location.save(&store.data_dir)?;
+                    }
+                }
+                Ok(None) => {
+                    location.save(&store.data_dir)?;
+                }
+                Err(error) => {
+                    store.warnings.push(error);
+                    location.save(&store.data_dir)?;
+                }
+            }
+        }
+        Ok(store)
+    }
+
+    fn open_internal(data_dir: &Path, migrate_legacy: bool) -> Result<Self, String> {
+        let database_lock = storage_location::lock_directory(data_dir)?;
+        let data_dir = fs::canonicalize(data_dir).map_err(|e| e.to_string())?;
+        let mut conn = sql(Connection::open(data_dir.join(DATABASE_NAME)))?;
         let version: u32 = sql(conn.query_row("PRAGMA user_version", [], |r| r.get(0)))?;
         if version > entry_codec::DATABASE_VERSION {
             return Err("数据库来自更新版本的 SnapDiff，请使用相应版本打开".into());
@@ -166,9 +223,159 @@ impl Store {
         let mut store = Self {
             conn,
             warnings: vec![],
+            data_dir,
+            location: None,
+            _database_lock: database_lock,
+            config_lock: None,
         };
-        store.migrate_legacy(&data_dir.join("snapshots"))?;
+        if migrate_legacy {
+            store.migrate_legacy(&store.data_dir.join("snapshots"))?;
+        }
         Ok(store)
+    }
+
+    pub fn storage_info(&self) -> serde_json::Value {
+        let key = root_key(&self.data_dir.to_string_lossy());
+        let mode = match &self.location {
+            Some(location) if key == root_key(&location.default_dir.to_string_lossy()) => "default",
+            Some(location) if key == root_key(&location.install_dir.to_string_lossy()) => "install",
+            _ => "custom",
+        };
+        let display_path = |path: &Path| {
+            let text = path.to_string_lossy();
+            if let Some(unc) = text.strip_prefix("\\\\?\\UNC\\") {
+                format!("\\\\{unc}")
+            } else {
+                text.strip_prefix("\\\\?\\").unwrap_or(&text).to_string()
+            }
+        };
+        serde_json::json!({
+            "warnings": self.warnings,
+            "mode": mode,
+            "database_path": display_path(&self.data_dir.join(DATABASE_NAME)),
+            "directory": display_path(&self.data_dir),
+            "default_directory": self.location.as_ref().map(|v| display_path(&v.default_dir)),
+            "install_directory": self.location.as_ref().map(|v| display_path(&v.install_dir)),
+        })
+    }
+
+    pub fn ensure_database_outside_root(&self, root: &Path) -> Result<(), String> {
+        let database = root_key(self.data_dir.to_str().ok_or("数据库路径无效")?);
+        let root = root_key(root.to_str().ok_or("目录路径无效")?);
+        if database == root || database.starts_with(&format!("{root}/")) {
+            return Err(
+                "该目录包含正在使用的 SnapDiff 数据库，请选择其他扫描目录或先迁移数据库".into(),
+            );
+        }
+        Ok(())
+    }
+
+    /// The caller holds the store mutex and scan idle guard throughout this operation.
+    pub fn migrate_to(&mut self, directory: &Path) -> Result<serde_json::Value, String> {
+        if !directory.is_absolute() {
+            return Err("请选择绝对路径的数据文件夹".into());
+        }
+        let location = self.location.clone().ok_or("数据库位置配置不可用")?;
+        let managed_roots: Vec<_> = configs(&self.conn)?
+            .into_iter()
+            .map(|config| root_key(&config.root_path))
+            .collect();
+        let check_target = |path: &Path| -> Result<(), String> {
+            let key = root_key(path.to_str().ok_or("目标路径无效")?);
+            if managed_roots
+                .iter()
+                .any(|root| key == *root || key.starts_with(&format!("{root}/")))
+            {
+                return Err("数据库不能迁移到已管理的扫描目录内，请选择其他位置".into());
+            }
+            Ok(())
+        };
+        check_target(directory)?;
+        check_target(&storage_location::resolve_directory(directory)?)?;
+        // Canonicalize before checking managed roots, including junction aliases.
+        fs::create_dir_all(directory).map_err(|e| format!("目标数据目录不可写: {e}"))?;
+        let directory = fs::canonicalize(directory).map_err(|e| e.to_string())?;
+        if directory == self.data_dir {
+            location.save(&directory)?;
+            return Ok(self.storage_info());
+        }
+        check_target(&directory)?;
+        let target_lock = storage_location::lock_directory(&directory)?;
+        let target = directory.join(DATABASE_NAME);
+        for suffix in ["", "-wal", "-shm", "-journal"] {
+            if fs::symlink_metadata(directory.join(format!("{DATABASE_NAME}{suffix}"))).is_ok() {
+                return Err("目标文件夹已有数据库或日志文件，不会覆盖；请选择其他文件夹".into());
+            }
+        }
+        // Reserve the final name without ever overwriting another database.
+        fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&target)
+            .map_err(|e| format!("创建目标数据库失败: {e}"))?;
+        let result = (|| {
+            let mut conn = sql(Connection::open(&target))?;
+            {
+                let backup = sql(rusqlite::backup::Backup::new(&self.conn, &mut conn))?;
+                sql(backup.run_to_completion(256, StdDuration::from_millis(1), None))?;
+            }
+            let integrity: String =
+                sql(conn.query_row("PRAGMA integrity_check", [], |r| r.get(0)))?;
+            if integrity != "ok" {
+                return Err(format!("迁移后的数据库校验失败: {integrity}"));
+            }
+            let violations: u64 = sql(conn.query_row(
+                "SELECT count(*) FROM pragma_foreign_key_check",
+                [],
+                |r| r.get(0),
+            ))?;
+            if violations != 0 {
+                return Err("迁移后的数据库引用校验失败".into());
+            }
+            sql(conn.execute_batch("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA cache_size=-8192; PRAGMA temp_store=FILE; PRAGMA temp.cache_size=-2048;"))?;
+            sql(conn.busy_timeout(StdDuration::from_secs(5)))?;
+            sql(conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)"))?;
+            fs::OpenOptions::new()
+                .write(true)
+                .open(&target)
+                .and_then(|file| file.sync_all())
+                .map_err(|e| format!("保存目标数据库失败: {e}"))?;
+            // This is the commit boundary. Until this succeeds the source stays active.
+            location.save(&directory)?;
+            Ok(conn)
+        })();
+        let conn = match result {
+            Ok(conn) => conn,
+            Err(error) => {
+                for suffix in ["", "-wal", "-shm", "-journal"] {
+                    let _ = fs::remove_file(directory.join(format!("{DATABASE_NAME}{suffix}")));
+                }
+                return Err(error);
+            }
+        };
+        let old_directory = self.data_dir.clone();
+        let destination = Self {
+            conn,
+            warnings: self.warnings.clone(),
+            data_dir: directory,
+            location: Some(location),
+            _database_lock: target_lock,
+            config_lock: self.config_lock.take(),
+        };
+        let old = std::mem::replace(self, destination);
+        drop(old); // Close SQLite/WAL before deleting only this store's old database.
+        let mut retained = false;
+        for suffix in ["-wal", "-shm", "-journal", ""] {
+            if let Err(e) = fs::remove_file(old_directory.join(format!("{DATABASE_NAME}{suffix}")))
+            {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    retained = true;
+                }
+            }
+        }
+        let mut info = self.storage_info();
+        info["source_retained"] = serde_json::json!(retained);
+        Ok(info)
     }
 
     pub fn config(&self, id: &str) -> Result<DirectoryConfig, String> {
@@ -259,34 +466,29 @@ impl Store {
     }
 
     pub fn compare_states(
-        &self,
+        &mut self,
         old_id: &str,
         new_id: &str,
         current: bool,
         focus: &[String],
     ) -> Result<SqlComparison, String> {
-        SqlComparison::build(
-            &self.conn,
-            &read_header(&self.conn, old_id)?,
-            &read_header(&self.conn, new_id)?,
-            current,
-            focus,
-            None,
-            false,
-        )
+        let old = read_header(&self.conn, old_id)?;
+        let new = read_header(&self.conn, new_id)?;
+        SqlComparison::build(&mut self.conn, &old, &new, current, focus, None, false)
     }
 
     pub fn compare_scan(
-        &self,
+        &mut self,
         old_id: &str,
         new: &Snapshot,
         current: bool,
         focus: &[String],
         cancel: Arc<AtomicBool>,
     ) -> Result<SqlComparison, String> {
+        let old = read_header(&self.conn, old_id)?;
         SqlComparison::build(
-            &self.conn,
-            &read_header(&self.conn, old_id)?,
+            &mut self.conn,
+            &old,
             new,
             current,
             focus,
@@ -898,6 +1100,10 @@ pub(crate) fn atomic_write(
     }
     result.map_err(|e| format!("保存文件失败: {e}"))
 }
+
+#[cfg(test)]
+#[path = "storage_location_tests.rs"]
+mod location_tests;
 
 #[cfg(test)]
 mod tests {

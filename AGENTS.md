@@ -55,6 +55,8 @@ The usual host shell is PowerShell. Quote paths containing spaces, use literal p
 | `src-tauri/src/scanner.rs` | Recursive enumeration, strict streaming MD5, progress, cancellation, file-stability checks |
 | `src-tauri/src/ignore.rs` | Ordered ignore/focus rule matching and effective scan scope |
 | `src-tauri/src/storage.rs` | Persistent SQLite store, directory identity, transactions, retention, migration, import/export |
+| `src-tauri/src/storage_location.rs`, `src-tauri/src/storage_location_tests.rs` | Per-user database location, installer bootstrap, locks, relocation regressions |
+| `src-tauri/installer/` | Pinned upstream NSIS template and database location page/hooks |
 | `src-tauri/src/entry_codec.rs` | Internal SQLite entry encoding and database schema migration |
 | `src-tauri/src/sql_diff.rs` | Production comparison, disposable SQL cache, queries, tree aggregation, report streaming |
 | `src-tauri/src/diff.rs` | Test-only in-memory reference implementation; not the production comparison path |
@@ -153,7 +155,11 @@ Do not present suspected moves as proven operations. Ambiguous hash matches rema
 
 ### Persistent store
 
-The application resolves its data directory using Tauri's path API and stores `snapdiff.sqlite3` there. The production identifier is `com.snapdiff.desktop`. Do not derive application paths from the process working directory or assume app data and app configuration directories are interchangeable on every platform.
+The application defaults to Tauri's application data directory and stores `snapdiff.sqlite3` there. Users may select the executable directory's `data` subfolder or another writable folder. The production identifier is `com.snapdiff.desktop`. The per-user `database-location.json` lives in Tauri's application configuration directory and takes precedence over the executable-adjacent `snapdiff-storage.ini` installer bootstrap. Do not derive application paths from the working directory or assume app data and app configuration directories are interchangeable.
+
+Database relocation uses SQLite's backup API under the store mutex and scan idle guard, checks database integrity and foreign keys, and persists the new location before switching connections or deleting the old database. Never copy a live SQLite main file alone, overwrite a destination database/sidecar, or recreate a missing configured database. Preserve original legacy JSON files and their copied migration markers. Relocation must not import unrelated legacy JSON from a custom destination. Use per-config and per-database file locks to exclude competing SnapDiff instances. Keep source directories unchanged by rejecting database destinations inside managed roots and scan roots containing the active database.
+
+The NSIS EXE installer offers a database-location page for the first configured launch. Existing saved preferences win during upgrades/reinstalls, and silent/passive installs leave the bootstrap unchanged. MSI users can relocate from the application. The NSIS template is pinned to Tauri CLI 2.12.2 with one inserted page macro; compare it against upstream when updating the CLI. Uninstall must not remove `data/`, custom databases, or the user's location preference.
 
 The persistent store uses SQLite WAL, foreign keys, a busy timeout, and a mutex-protected connection. Its primary tables are:
 
@@ -216,6 +222,7 @@ Tauri commands are registered in `src-tauri/src/lib.rs` and implemented in `comm
 | Area | Commands |
 | --- | --- |
 | Directory overview | `list_directories`, `get_directory`, `validate_directory_path`, `get_storage_info` |
+| Database location | `migrate_database` (explicit confirmed relocation, no scan) |
 | Manual scan | `scan_directory`, `cancel_scan` |
 | History and activity | `list_history`, `select_baseline`, `get_activity`, `set_remark`, `delete_nodes` |
 | Settings | `preview_retention`, `update_settings`, `set_focus_patterns`, `delete_directory` |
@@ -265,6 +272,8 @@ npm run tauri dev
 ```
 
 There is no `npm run build` script. Tauri embeds `frontend/` directly.
+
+Keep rusqlite's `fallible_uint` feature enabled for checked `u64`/`usize` SQLite reads. Its progress-handler API requires a mutable connection and returns a result; preserve cancellation-hook cleanup when updating the dependency. MD5 output is encoded from bytes as lowercase hexadecimal because md-5 0.11 digest arrays do not implement `LowerHex`.
 
 ### Choose checks appropriate to the change
 

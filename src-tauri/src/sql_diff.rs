@@ -100,10 +100,10 @@ impl Aggregate<i128, String> for Sum128 {
 }
 
 // Always remove staging rows, callbacks and cancellation hooks, even on error.
-struct SourceGuard<'a>(&'a Connection);
+struct SourceGuard<'a>(&'a mut Connection);
 impl Drop for SourceGuard<'_> {
     fn drop(&mut self) {
-        self.0.progress_handler(0, None::<fn() -> bool>);
+        let _ = self.0.progress_handler(0, None::<fn() -> bool>);
         let _ = self
             .0
             .execute_batch("ROLLBACK TO scan_stage; RELEASE scan_stage;");
@@ -123,7 +123,7 @@ pub struct SqlComparison {
 
 impl SqlComparison {
     pub fn build(
-        source: &Connection,
+        source: &mut Connection,
         old: &Snapshot,
         new: &Snapshot,
         current: bool,
@@ -143,10 +143,13 @@ impl SqlComparison {
         )?);
         let focus = IgnoreMatcher::from_patterns(focus_patterns)?;
         let structure = old.directory_entries_complete && new.directory_entries_complete;
-        let _guard = SourceGuard(source);
+        let guard = SourceGuard(source);
         if let Some(token) = cancel.clone() {
-            source.progress_handler(1000, Some(move || token.load(Ordering::Relaxed)));
+            sql(guard
+                .0
+                .progress_handler(1000, Some(move || token.load(Ordering::Relaxed))))?;
         }
+        let source = &*guard.0;
         let old_rules = old_ignore.clone();
         let new_rules = new_ignore.clone();
         sql(source.create_scalar_function(
@@ -186,7 +189,7 @@ impl SqlComparison {
         };
         // Empty SQLite filename creates an automatically deleted disk-backed DB.
         // Unsafe durability settings apply only to this disposable comparison.
-        let conn = sql(Connection::open(""))?;
+        let mut conn = sql(Connection::open(""))?;
         sql(conn.execute_batch("PRAGMA foreign_keys=ON; PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF;
             PRAGMA cache_size=-2048; PRAGMA temp_store=FILE;
             CREATE TABLE changes(id INTEGER PRIMARY KEY,path TEXT NOT NULL UNIQUE,old_path TEXT NOT NULL,old_kind TEXT NOT NULL,
@@ -198,7 +201,7 @@ impl SqlComparison {
             CREATE TEMP TABLE tree_key(value TEXT);
             BEGIN;"))?;
         if let Some(token) = cancel.clone() {
-            conn.progress_handler(1000, Some(move || token.load(Ordering::Relaxed)));
+            sql(conn.progress_handler(1000, Some(move || token.load(Ordering::Relaxed))))?;
         }
         // EXCEPT performs sequential scans with disk-backed set operations.
         // Point-joining every path regresses badly on wide WITHOUT ROWID keys.
@@ -332,7 +335,7 @@ impl SqlComparison {
         drop(rows);
         drop(stmt);
         checkpoint(cancel.as_ref())?;
-        conn.progress_handler(0, None::<fn() -> bool>);
+        sql(conn.progress_handler(0, None::<fn() -> bool>))?;
         sql(conn.create_aggregate_function(
             "sd_sum",
             1,

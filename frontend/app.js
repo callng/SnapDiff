@@ -99,14 +99,14 @@ SD.app = (() => {
     action(null, refreshDirectories);
   }
   function openCreate(rootPath = '') {
-    if (s.task) return;
+    if (s.task || s.storageBusy) return;
     dropRequest++;
     $('root-path').value = rootPath; $('ignore-patterns').value = '';
     SD.open('create-modal'); $('root-path').focus();
   }
   function canAcceptDrop() {
     return $('startup-screen').hidden && $('home-view').classList.contains('active')
-      && !s.task && !document.querySelector('dialog[open]');
+      && !s.task && !s.storageBusy && !document.querySelector('dialog[open]');
   }
   async function onDirectoryDrop(event) {
     const request = ++dropRequest;
@@ -128,7 +128,7 @@ SD.app = (() => {
     return '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, c => (Number(c) ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> Number(c) / 4).toString(16));
   }
   async function startScan(options) {
-    if (s.task) return;
+    if (s.task || s.storageBusy) return;
     const taskId = newTaskId();
     const request = { taskId, mode: options.mode, directoryId: options.directoryId || null, rootPath: options.rootPath || null, ignorePatterns: options.ignorePatterns || [], remark: '' };
     s.task = { id: taskId, mode: request.mode, cancelling: false, saving: false };
@@ -196,12 +196,15 @@ SD.app = (() => {
     $('current-file').textContent = (p.current_path || '') + (p.phase === 'hashing' ? ' · MD5 ' + bytes(p.current_file_bytes) + ' / ' + bytes(p.current_file_size) : '');
   }
   function syncBusy() {
-    const busy = !!s.task;
+    const busy = !!s.task || !!s.storageBusy;
     const toggle = (id, disabled) => {
       const button = $(id);
       if (button) button.disabled = !!disabled || button.dataset.working === 'true';
     };
     toggle('new-snapshot-btn', busy); toggle('empty-create-btn', busy); toggle('import-btn', busy);
+    toggle('storage-btn', busy); toggle('storage-migrate', busy);
+    toggle('storage-mode', s.storageBusy); toggle('storage-close', s.storageBusy); toggle('storage-cancel', s.storageBusy);
+    toggle('storage-browse', s.storageBusy || $('storage-mode').value !== 'custom');
     toggle('check-btn', busy || !s.directory?.available); toggle('capture-btn', busy || !s.directory?.available);
     toggle('save-settings-btn', busy); toggle('delete-directory-btn', busy);
     const validTarget = s.target === 'current' ? !!s.directory?.current : s.history.some(n => n.id === s.target);
@@ -213,6 +216,38 @@ SD.app = (() => {
     $('root-path').disabled = $('ignore-patterns').disabled = busy; toggle('browse-btn', busy);
     document.querySelectorAll('[data-update], [data-baseline], [data-target], [data-remark], [data-focus]').forEach(button => button.disabled = busy || button.dataset.working === 'true' || (button.dataset.target && button.dataset.target === s.oldId) || (button.dataset.update && !s.directories.find(d => d.id === button.dataset.update)?.available));
     if (busy) { toggle('delete-nodes-btn', true); toggle('export-nodes-btn', true); }
+  }
+  let storageInfo;
+  function renderStorage(info) {
+    storageInfo = info;
+    $('storage-current').textContent = info.database_path || '';
+    $('storage-mode').value = info.mode || 'custom';
+    $('storage-directory').value = info.directory || '';
+    SD.notice('storage-status', ''); syncBusy();
+  }
+  async function openStorage() {
+    if (s.task || s.storageBusy) return;
+    const info = await invoke('get_storage_info');
+    if (s.task || s.storageBusy) return;
+    renderStorage(info); SD.open('storage-modal');
+  }
+  async function migrateStorage() {
+    if (s.task || s.storageBusy) return;
+    const directory = $('storage-directory').value;
+    if (!directory) throw new Error('请选择数据库保存位置');
+    if (!await SD.confirm('迁移数据库', '将全部记录迁移到新位置，校验成功后切换并清理旧数据库。迁移期间请保持应用开启。', '当前：' + storageInfo.database_path + '\n目标：' + directory)) return;
+    if (s.task || s.storageBusy) return;
+    s.storageBusy = true; syncBusy();
+    SD.notice('storage-status', '正在迁移并校验数据库，请稍候…');
+    try {
+      const info = await invoke('migrate_database', { directory });
+      renderStorage(info);
+      SD.notice('storage-status', info.source_retained ? '已切换到新位置。旧数据库未能完全清理，请关闭应用后检查原位置。' : '数据库已迁移，下次启动会继续使用此位置。');
+      toast('数据库已迁移');
+    } catch (error) {
+      SD.notice('storage-status', '迁移失败，继续使用原数据库：' + error);
+      throw error;
+    } finally { s.storageBusy = false; syncBusy(); }
   }
   function openSettings() {
     if (!s.directory) return;
@@ -280,6 +315,18 @@ SD.app = (() => {
     $('target-select').onchange = () => { s.target = $('target-select').value; SD.notice('update-notice', ''); compare(); };
     $('compare-btn').onclick = () => action($('compare-btn'), compare);
     $('settings-btn').onclick = openSettings;
+    $('storage-btn').onclick = () => action($('storage-btn'), openStorage);
+    $('storage-mode').onchange = () => {
+      const mode = $('storage-mode').value;
+      $('storage-directory').value = mode === 'default' ? storageInfo.default_directory || '' : mode === 'install' ? storageInfo.install_directory || '' : '';
+      syncBusy();
+    };
+    $('storage-browse').onclick = () => action($('storage-browse'), async () => {
+      const directory = await SD.chooseDirectory('选择数据库保存文件夹');
+      if (directory && !s.storageBusy) $('storage-directory').value = directory;
+    });
+    $('storage-form').onsubmit = event => { event.preventDefault(); action($('storage-migrate'), migrateStorage); };
+    $('storage-modal').addEventListener('cancel', event => { if (s.storageBusy) event.preventDefault(); });
     $('retention-mode').onchange = () => $('retention-number-field').classList.toggle('hidden', $('retention-mode').value !== 'custom');
     $('settings-form').onsubmit = event => { event.preventDefault(); action($('save-settings-btn'), saveSettings); };
     $('export-directory-btn').onclick = () => action($('export-directory-btn'), () => exportData(s.directory.id));
@@ -304,7 +351,7 @@ SD.app = (() => {
         }
         await refreshDirectories();
         const info = await invoke('get_storage_info');
-        if (info?.warnings?.length) SD.notice('app-error', '以下旧快照未迁移，原文件保留：\n' + info.warnings.join('\n'));
+        if (info?.warnings?.length) SD.notice('app-error', '数据加载提示：\n' + info.warnings.join('\n'));
       } catch (error) {
         if (!$('app-error').textContent) SD.notice('app-error', '启动未完成，请刷新目录列表重试：' + error);
         toast(String(error), true);
