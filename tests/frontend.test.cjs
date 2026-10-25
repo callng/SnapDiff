@@ -310,12 +310,81 @@ test('manual check uses a task ID, locks creation, ignores stale progress, and c
     a.listeners['scan-progress']({ payload: { ...progress, task_id: 'stale' } });
     assert.equal(a.el('progress-percent').textContent, '');
     a.listeners['scan-progress']({ payload: { ...progress, task_id: scan.args.request.taskId } });
-    assert.match(a.el('current-file').textContent, /MD5.*512.*1.00 GiB/);
+    assert.equal(a.el('current-file').textContent, 'large.bin');
+    assert.match(a.el('file-progress-size').textContent, /512.*1.00 GiB/);
     assert.equal(a.el('progress-percent').textContent, '50.0%');
+    assert.equal(a.el('file-progress-percent').textContent, '50.0%');
     a.el('cancel-scan-btn').click(); await turn(); await turn();
     assert.equal(a.calls.find(c => c.cmd === 'cancel_scan').args.taskId, scan.args.request.taskId);
     assert(a.el('scan-panel').classList.contains('hidden'));
     assert(!a.el('capture-btn').disabled);
+  } finally { a.close(); }
+});
+
+test('total and file progress stay independent across files and scan phases', async () => {
+  const a = await app();
+  try {
+    a.window.SD.app.startScan({ mode: 'check', directoryId: 'dir' }); await turn();
+    const task_id = a.pending.request.taskId;
+    const send = p => a.listeners['scan-progress']({ payload: { task_id, ...p } });
+    assert(a.el('progress-bar').classList.contains('indeterminate'));
+    assert(a.el('file-progress').classList.contains('hidden'));
+    const progress = { phase: 'hashing', processed: 3, total: 10, current_path: 'mods/<img onerror=bad>.bin', current_file_bytes: 50, current_file_size: 100, processed_bytes: 200, total_bytes: 1000 };
+    send(progress);
+    assert.equal(a.el('progress-bar').style.width, '25%');
+    assert.equal(a.el('file-progress-bar').style.width, '50%');
+    assert.equal(a.el('progress-size').textContent, '250 B / 1000 B');
+    assert.equal(a.el('file-progress-size').textContent, '50 B / 100 B');
+    assert.equal(a.el('total-progress-track').getAttribute('aria-valuenow'), '25.0');
+    assert.equal(a.el('file-progress-track').getAttribute('aria-valuenow'), '50.0');
+    assert(!a.el('file-progress').classList.contains('hidden'));
+    assert.equal(a.el('current-file').textContent, progress.current_path);
+    assert.equal(a.el('current-file').querySelector('img'), null);
+    send({ ...progress, phase: 'scanning', processed: 4, current_file_bytes: 100, processed_bytes: 300 });
+    assert.equal(a.el('progress-percent').textContent, '30.0%');
+    assert.equal(a.el('file-progress-percent').textContent, '100.0%');
+    send({ ...progress, processed: 4, current_path: 'next.bin', current_file_bytes: 0, processed_bytes: 300 });
+    assert.equal(a.el('progress-percent').textContent, '30.0%');
+    assert.equal(a.el('file-progress-percent').textContent, '0.0%');
+    for (const phase of ['collecting', 'comparing', 'saving']) {
+      send({ phase, processed: 0, total: 0, current_path: '', current_file_bytes: 0, current_file_size: 0, processed_bytes: 0, total_bytes: 0 });
+      assert(a.el('progress-bar').classList.contains('indeterminate'), phase);
+      assert(a.el('file-progress').classList.contains('hidden'), phase);
+      assert.equal(a.el('progress-percent').textContent, '');
+      assert.equal(a.el('progress-size').textContent, '');
+      assert.equal(a.el('total-progress-track').hasAttribute('aria-valuenow'), false);
+    }
+    assert(a.el('cancel-scan-btn').disabled);
+    await a.completeScan();
+    assert(a.el('scan-panel').classList.contains('hidden'));
+  } finally { a.close(); }
+});
+
+test('progress handles zero-byte entries and resets after a failed scan', async () => {
+  const a = await app();
+  try {
+    a.window.SD.app.startScan({ mode: 'create', rootPath: 'C:/empty' }); await turn();
+    const task_id = a.pending.request.taskId;
+    const progress = { task_id, phase: 'hashing', processed: 1, total: 4, current_path: 'empty.txt', current_file_bytes: 0, current_file_size: 0, processed_bytes: 0, total_bytes: 0 };
+    a.listeners['scan-progress']({ payload: progress });
+    assert.equal(a.el('progress-percent').textContent, '25.0%');
+    assert.equal(a.el('file-progress-percent').textContent, '100.0%');
+    assert.equal(a.el('file-progress-size').textContent, '0 B / 0 B');
+    a.listeners['scan-progress']({ payload: { ...progress, phase: 'scanning', processed: 2, current_path: 'empty-folder' } });
+    assert.equal(a.el('progress-percent').textContent, '50.0%');
+    assert(a.el('file-progress').classList.contains('hidden'));
+    a.listeners['scan-progress']({ payload: { ...progress, phase: 'hashing', current_file_size: 100, current_file_bytes: 70, total_bytes: 100 } });
+    a.pending.reject('文件读取失败'); await turn(); await turn();
+    assert(a.el('scan-panel').classList.contains('scan-error'));
+    assert(a.el('file-progress').classList.contains('hidden'));
+    a.el('retry-scan-btn').click(); await turn();
+    assert(a.el('progress-bar').classList.contains('indeterminate'));
+    assert.equal(a.el('progress-percent').textContent, '');
+    assert.equal(a.el('progress-size').textContent, '');
+    assert.equal(a.el('file-progress-bar').style.width, '0%');
+    assert(a.el('file-progress').classList.contains('hidden'));
+    a.el('cancel-scan-btn').click(); await turn(); await turn();
+    assert(a.el('scan-panel').classList.contains('hidden'));
   } finally { a.close(); }
 });
 

@@ -136,7 +136,10 @@ SD.app = (() => {
     SD.close('create-modal'); SD.close('history-modal'); SD.close('settings-modal');
     $('scan-panel').classList.remove('hidden', 'scan-error');
     $('scan-title').textContent = request.mode === 'check' ? '检查目录变化' : request.mode === 'create' ? '创建第一个时间节点' : '更新目录快照';
-    $('progress-text').textContent = '正在准备…'; $('progress-percent').textContent = '';
+    $('progress-text').textContent = '正在准备…'; $('progress-percent').textContent = ''; $('progress-size').textContent = '';
+    $('file-progress').classList.add('hidden');
+    $('file-progress-bar').style.width = '0%'; $('file-progress-percent').textContent = ''; $('file-progress-size').textContent = '';
+    $('file-progress-track').setAttribute('aria-valuenow', '0'); $('total-progress-track').removeAttribute('aria-valuenow');
     $('current-file').textContent = options.rootPath || s.directories.find(d => d.id === options.directoryId)?.root_path || s.directory?.root_path || '';
     $('progress-bar').style.width = '0%'; $('progress-bar').classList.add('indeterminate');
     $('cancel-scan-btn').classList.remove('hidden'); $('cancel-scan-btn').disabled = false; $('cancel-scan-btn').textContent = '取消扫描';
@@ -165,6 +168,7 @@ SD.app = (() => {
         syncBusy(); return;
       }
       $('progress-bar').classList.remove('indeterminate');
+      $('file-progress').classList.add('hidden');
       $('cancel-scan-btn').classList.add('hidden'); $('dismiss-scan-btn').classList.remove('hidden');
       if (String(error).includes('扫描已取消')) {
         $('scan-panel').classList.add('hidden'); toast('扫描已取消，本次状态未保存');
@@ -191,9 +195,22 @@ SD.app = (() => {
     $('progress-bar').classList.toggle('indeterminate', indeterminate);
     $('progress-bar').style.width = Math.min(100, percent).toFixed(1) + '%';
     $('progress-percent').textContent = !indeterminate && p.total ? Math.min(100, percent).toFixed(1) + '%' : '';
+    if (indeterminate) $('total-progress-track').removeAttribute('aria-valuenow');
+    else $('total-progress-track').setAttribute('aria-valuenow', Math.min(100, percent).toFixed(1));
+    $('progress-size').textContent = !indeterminate && p.total_bytes ? bytes(p.processed_bytes + hashingBytes) + ' / ' + bytes(p.total_bytes) : '';
+    const showFile = p.phase === 'hashing' || (p.phase === 'scanning' && p.current_file_size > 0);
+    $('file-progress').classList.toggle('hidden', !showFile);
+    if (showFile) {
+      const filePercent = p.current_file_size ? Math.min(100, p.current_file_bytes * 100 / p.current_file_size) : 100;
+      $('file-progress-bar').style.width = filePercent.toFixed(1) + '%';
+      $('file-progress-percent').textContent = filePercent.toFixed(1) + '%';
+      $('file-progress-size').textContent = bytes(p.current_file_bytes) + ' / ' + bytes(p.current_file_size);
+      $('file-progress-track').setAttribute('aria-valuenow', filePercent.toFixed(1));
+    }
     const phases = { collecting: '正在读取目录结构…', comparing: '正在计算差异…', saving: '正在提交完整状态…', completed: '已完成' };
     $('progress-text').textContent = s.task.cancelling ? '正在取消，等待当前读取返回…' : phases[p.phase] || '已处理 ' + p.processed.toLocaleString() + ' / ' + p.total.toLocaleString() + ' 项';
-    $('current-file').textContent = (p.current_path || '') + (p.phase === 'hashing' ? ' · MD5 ' + bytes(p.current_file_bytes) + ' / ' + bytes(p.current_file_size) : '');
+    $('current-file').textContent = p.current_path || '';
+    $('current-file').title = p.current_path || '';
   }
   function syncBusy() {
     const busy = !!s.task || !!s.storageBusy;

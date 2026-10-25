@@ -219,12 +219,17 @@ details[open] > summary .detail-chevron { transform: rotate(180deg); }
 .scan-top strong { font-size: 13px; display: block; margin-bottom: 5px; color: #d4e5fb; }
 .scan-top > div:first-child { min-width: 0; }
 #progress-text { font-size: 11px; color: #94accb; overflow-wrap: anywhere; }
-#progress-percent { color: var(--blue); font-size: 12px; }
-.progress-track { height: 5px; background: #0d1725; border-radius: 5px; overflow: hidden; margin: 14px 0 9px; }
+.scan-progress { margin-top: 14px; }
+.progress-summary { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; color: #94accb; font-size: 11px; }
+.progress-values { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 4px 12px; text-align: right; font-variant-numeric: tabular-nums; }
+#progress-percent, #file-progress-percent { color: var(--blue); }
+.progress-track { height: 5px; background: #0d1725; border-radius: 5px; overflow: hidden; margin-top: 7px; }
+.file-progress-track { height: 4px; }
+.file-progress-track .progress-bar { background: var(--green); transition: none; }
 .progress-bar { height: 100%; background: var(--blue); transition: width .15s; }
 .progress-bar.indeterminate { width: 25% !important; animation: progress 1.4s ease-in-out infinite; }
 @keyframes progress { 0% { transform: translateX(-100%); } 100% { transform: translateX(450%); } }
-.current-file { color: #7c98bc; font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.current-file { margin-top: 9px; color: #7c98bc; font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .scan-error { border-color: #a05668; }
 .scan-error #progress-text { color: var(--red); }
 .toast { position: fixed; bottom: 24px; left: 50%; transform: translate(-50%, 20px); padding: 12px 18px; background: #2c425d; border: 1px solid #54779e; color: #e0edff; border-radius: 9px; max-width: 85vw; font-size: 12px; line-height: 1.6; opacity: 0; pointer-events: none; transition: .18s; z-index: 30; }
