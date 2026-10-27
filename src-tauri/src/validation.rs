@@ -39,7 +39,10 @@ fn unicode_and_long_windows_paths_preserve_relative_names() {
     let file = entries.iter().find(|e| e.kind == EntryKind::File).unwrap();
     assert!(file.relative_path.ends_with("/中文 😀 & ' [文件].txt"));
     assert!(!file.relative_path.contains('\\'));
-    assert_eq!(file.md5, "900150983cd24fb0d6963f7d28e17f72");
+    assert_eq!(
+        file.hash,
+        "6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85"
+    );
     assert!(file.relative_path.len() > 260);
 }
 
@@ -100,7 +103,7 @@ fn junction_is_recorded_without_reading_the_target_tree() {
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].relative_path, "junction");
     assert_eq!(entries[0].kind, EntryKind::Symlink);
-    assert_eq!(entries[0].md5.len(), 32);
+    assert_eq!(entries[0].hash.len(), 64);
     assert_eq!(
         storage::root_key(junction.to_str().unwrap()),
         storage::root_key(outside.path().to_str().unwrap())
@@ -185,7 +188,7 @@ fn stress_large_file() {
     .unwrap();
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].size, bytes);
-    assert_eq!(entries[0].md5.len(), 32);
+    assert_eq!(entries[0].hash.len(), 64);
     eprintln!(
         "scan_seconds={:.3} mib_per_second={:.1} progress_events={progress_events}",
         start.elapsed().as_secs_f64(),
@@ -256,7 +259,7 @@ fn stress_many_files_and_history() {
     let mut new = old.clone();
     new.id = "new".into();
     for entry in new.files.iter_mut().filter(|e| e.kind == EntryKind::File) {
-        entry.md5 = "a".repeat(32);
+        entry.hash = "a".repeat(64);
     }
     let start = Instant::now();
     let comparison = diff::compare(&old, &new, false, &[]).unwrap();

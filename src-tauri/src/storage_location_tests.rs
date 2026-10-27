@@ -19,7 +19,7 @@ fn populate(store: &mut Store, root: &Path) -> String {
             kind: EntryKind::File,
             size: 987654,
             modified_time: Utc::now(),
-            md5: "1234567890abcdef1234567890abcdef".into(),
+            hash: "1234567890abcdef1234567890abcdef".into(),
         }],
     );
     state.directory_id = config.id.clone();
@@ -28,7 +28,7 @@ fn populate(store: &mut Store, root: &Path) -> String {
     store.commit_scan(&config, &state, true, 3, true).unwrap();
     let mut config = store.config(&config.id).unwrap();
     state.id = Uuid::new_v4().to_string();
-    state.files[0].md5 = "abcdef1234567890abcdef1234567890".into();
+    state.files[0].hash = "abcdef1234567890abcdef1234567890".into();
     store.commit_scan(&config, &state, false, 2, false).unwrap();
     config = store.config(&config.id).unwrap();
     store

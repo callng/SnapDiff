@@ -1,6 +1,6 @@
 [package]
 name = "snapdiff"
-version = "0.2.6"
+version = "0.3.0"
 description = "Lightweight directory snapshot and diff tool"
 authors = ["SnapDiff"]
 edition = "2021"
@@ -10,23 +10,24 @@ name = "snapdiff_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "2.7.4", features = [] }
 
 [dependencies]
-chrono = { version = "0.4", features = ["serde", "clock"] }
-globset = "0.4"
-md-5 = "0.11.0"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-tauri = { version = "2", features = [] }
-tauri-plugin-dialog = "2"
-tauri-plugin-window-state = "2"
-walkdir = "2"
-uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4.45", features = ["serde", "clock"] }
+globset = "0.4.20"
+blake3 = { version = "1.8.7", features = ["rayon"] }
+rayon = "1.12.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tauri = { version = "2.12.5", features = [] }
+tauri-plugin-dialog = "2.8.3"
+tauri-plugin-window-state = "2.5.0"
+walkdir = "2.5.0"
+uuid = { version = "1.29.0", features = ["v4", "serde"] }
 rusqlite = { version = "0.41.0", features = ["bundled", "functions", "hooks", "backup", "fallible_uint"] }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile = "3.27.0"
 
 [target.'cfg(windows)'.dev-dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_ProcessStatus", "Win32_System_Threading"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_ProcessStatus", "Win32_System_Threading"] }

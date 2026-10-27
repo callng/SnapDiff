@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const CURRENT_SCHEMA_VERSION: u32 = 2;
+pub const CURRENT_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -20,10 +20,21 @@ pub struct FileEntry {
     pub kind: EntryKind,
     pub size: u64,
     pub modified_time: DateTime<Utc>,
-    pub md5: String,
+    #[serde(alias = "md5")]
+    pub hash: String,
 }
 
-// Schema 1 JSON stays readable. New captures record their actual scan scope.
+impl FileEntry {
+    pub fn hash_label(&self) -> &'static str {
+        if self.hash.len() == 32 {
+            "MD5（历史）"
+        } else {
+            "BLAKE3"
+        }
+    }
+}
+
+// Schema 1/2 JSON stays readable. New captures record their actual scan scope.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Snapshot {
     pub schema_version: u32,
@@ -60,6 +71,22 @@ pub struct TypeStat {
 }
 
 impl Snapshot {
+    pub fn hash_algorithm(&self) -> &'static str {
+        if self.schema_version >= 3 {
+            "blake3"
+        } else {
+            "md5"
+        }
+    }
+    pub fn ensure_comparable(&self, other: &Self) -> Result<(), String> {
+        if self.hash_algorithm() != other.hash_algorithm() {
+            return Err(
+                "MD5 历史与 BLAKE3 状态不能比较内容，请更新快照建立 BLAKE3 基准；旧历史会保留"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
     pub fn header(&self) -> Self {
         Self {
             schema_version: self.schema_version,
@@ -112,6 +139,7 @@ impl Snapshot {
     }
     pub fn summary(&self) -> SnapshotSummary {
         SnapshotSummary {
+            hash_algorithm: self.hash_algorithm().into(),
             id: self.id.clone(),
             directory_id: self.directory_id.clone(),
             created_time: self.created_time,
@@ -127,6 +155,7 @@ impl Snapshot {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SnapshotSummary {
+    pub hash_algorithm: String,
     pub id: String,
     pub directory_id: String,
     pub created_time: DateTime<Utc>,
@@ -302,6 +331,7 @@ pub struct ActivityDay {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ScanResult {
+    pub notice: Option<String>,
     pub directory_id: String,
     pub state: SnapshotSummary,
     pub comparison: Option<ComparisonSummary>,

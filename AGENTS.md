@@ -4,7 +4,7 @@
 
 This document guides AI coding agents working anywhere in the SnapDiff repository. Read it before changing code. More specific instructions in a nested `AGENTS.md`, if introduced later, apply within that directory. Explicit instructions from the current user take precedence over repository guidance.
 
-SnapDiff is a Windows-first, local desktop directory-state comparison tool built with Rust and Tauri 2. It records directory structure, file metadata, and MD5 hashes, then compares manually recorded states. It is a general-purpose directory tool; games and Mod management are examples, not restrictions on its UI or behavior.
+SnapDiff is a Windows-first, local desktop directory-state comparison tool built with Rust and Tauri 2. It records directory structure, file metadata, and BLAKE3 hashes, then compares manually recorded states. It is a general-purpose directory tool; games and Mod management are examples, not restrictions on its UI or behavior.
 
 The frontend currently uses static HTML, CSS, and plain JavaScript. There is no React, Vue, Svelte, TypeScript, bundler, frontend compilation step, or production HTTP server. Do not introduce one solely for a small feature.
 
@@ -19,7 +19,7 @@ Preserve these boundaries unless the user explicitly changes the product scope:
 - Do not add accounts, cloud services, telemetry, remote APIs, or runtime network features.
 - Do not modify files in a scanned directory. Deleting a directory record or history node deletes application records only.
 - Keep scanning and comparison in Rust. The frontend displays summaries and bounded result pages.
-- Use MD5 as the required change fingerprint. Do not market it as cryptographic integrity, tamper detection, or proof of authenticity.
+- Use BLAKE3 for all new change fingerprints. Never calculate MD5; retain existing MD5 values only for historical comparisons and exchange. Do not market it as cryptographic integrity, tamper detection, or proof of authenticity.
 - Keep user operations explicit. Opening the app, a directory workspace, a history dialog, or the creation dialog must not start a scan.
 
 Development dependency downloads and localhost preview tools are separate from production behavior.
@@ -37,38 +37,38 @@ The usual host shell is PowerShell. Quote paths containing spaces, use literal p
 
 ## Repository map
 
-| Path | Responsibility |
-| --- | --- |
-| `Cargo.toml` | Rust workspace; includes `src-tauri` |
-| `Cargo.lock` | Workspace dependency lockfile |
-| `package.json`, `package-lock.json` | Tauri CLI and frontend test dependencies |
-| `frontend/index.html` | Static views, dialogs, startup markup, displayed version |
-| `frontend/styles.css` | Dark desktop styling, responsive layout, loading animation |
-| `frontend/core.js` | `window.SD`, shared state, invoke wrapper, escaping, dialogs, notifications, clipboard, default-menu suppression |
-| `frontend/app.js` | Initialization, directory navigation, scan lifecycle, settings, import/export, native drop handling |
-| `frontend/history.js` | History selection, activity grid, remarks, batch actions |
-| `frontend/results.js` | Difference queries, pages, filters, details, tree navigation, reports |
-| `src-tauri/src/main.rs` | Desktop executable entry point and Windows GUI subsystem |
-| `src-tauri/src/lib.rs` | Plugins, startup wiring, backend state, command registration |
-| `src-tauri/src/startup_window.rs` | Gate joining page readiness and restored window geometry |
-| `src-tauri/src/models.rs` | Public models, summaries, entry/status types, public JSON schema version |
-| `src-tauri/src/scanner.rs` | Recursive enumeration, strict streaming MD5, progress, cancellation, file-stability checks |
-| `src-tauri/src/ignore.rs` | Ordered ignore/focus rule matching and effective scan scope |
-| `src-tauri/src/storage.rs` | Persistent SQLite store, directory identity, transactions, retention, migration, import/export |
-| `src-tauri/src/storage_location.rs`, `src-tauri/src/storage_location_tests.rs` | Per-user database location, installer bootstrap, locks, relocation regressions |
-| `src-tauri/installer/` | Pinned upstream NSIS template and database location page/hooks |
-| `src-tauri/src/entry_codec.rs` | Internal SQLite entry encoding and database schema migration |
-| `src-tauri/src/sql_diff.rs` | Production comparison, disposable SQL cache, queries, tree aggregation, report streaming |
-| `src-tauri/src/diff.rs` | Test-only in-memory reference implementation; not the production comparison path |
-| `src-tauri/src/commands.rs` | Tauri commands, task lifecycle, locks, caches, commit boundary |
-| `src-tauri/src/sql_diff_tests.rs` | SQL/reference equivalence and comparison regression tests |
-| `src-tauri/src/validation.rs` | Filesystem integration tests and opt-in resource stress tests |
-| `src-tauri/src/storage_benchmark.rs` | Opt-in synthetic storage/query benchmark, included by the validation module |
-| `src-tauri/tauri.conf.json` | Desktop identity, static assets, window settings, installer configuration |
-| `src-tauri/capabilities/default.json` | Main-window Tauri capabilities |
-| `tests/frontend.test.cjs` | Node test runner and JSDOM interaction regressions with a mocked Tauri bridge |
-| `tests/preview.cjs`, `tests/preview-fixture.js` | Development-only localhost UI preview with labeled demonstration data |
-| `docs/validation-0.2.1.md`, `docs/validation-0.2.2.md` | Historical validation evidence and performance limitations |
+| Path                                                                           | Responsibility                                                                                                   |
+|--------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------|
+| `Cargo.toml`                                                                   | Rust workspace; includes `src-tauri`                                                                             |
+| `Cargo.lock`                                                                   | Workspace dependency lockfile                                                                                    |
+| `package.json`, `package-lock.json`                                            | Tauri CLI and frontend test dependencies                                                                         |
+| `frontend/index.html`                                                          | Static views, dialogs, startup markup, displayed version                                                         |
+| `frontend/styles.css`                                                          | Dark desktop styling, responsive layout, loading animation                                                       |
+| `frontend/core.js`                                                             | `window.SD`, shared state, invoke wrapper, escaping, dialogs, notifications, clipboard, default-menu suppression |
+| `frontend/app.js`                                                              | Initialization, directory navigation, scan lifecycle, settings, import/export, native drop handling              |
+| `frontend/history.js`                                                          | History selection, activity grid, remarks, batch actions                                                         |
+| `frontend/results.js`                                                          | Difference queries, pages, filters, details, tree navigation, reports                                            |
+| `src-tauri/src/main.rs`                                                        | Desktop executable entry point and Windows GUI subsystem                                                         |
+| `src-tauri/src/lib.rs`                                                         | Plugins, startup wiring, backend state, command registration                                                     |
+| `src-tauri/src/startup_window.rs`                                              | Gate joining page readiness and restored window geometry                                                         |
+| `src-tauri/src/models.rs`                                                      | Public models, summaries, entry/status types, public JSON schema version                                         |
+| `src-tauri/src/scanner.rs`                                                     | Recursive enumeration, bounded streaming BLAKE3, progress, cancellation, file-stability checks                   |
+| `src-tauri/src/ignore.rs`                                                      | Ordered ignore/focus rule matching and effective scan scope                                                      |
+| `src-tauri/src/storage.rs`                                                     | Persistent SQLite store, directory identity, transactions, retention, migration, import/export                   |
+| `src-tauri/src/storage_location.rs`, `src-tauri/src/storage_location_tests.rs` | Per-user database location, installer bootstrap, locks, relocation regressions                                   |
+| `src-tauri/installer/`                                                         | Pinned upstream NSIS template and database location page/hooks                                                   |
+| `src-tauri/src/entry_codec.rs`                                                 | Internal SQLite entry encoding and database schema migration                                                     |
+| `src-tauri/src/sql_diff.rs`                                                    | Production comparison, disposable SQL cache, queries, tree aggregation, report streaming                         |
+| `src-tauri/src/diff.rs`                                                        | Test-only in-memory reference implementation; not the production comparison path                                 |
+| `src-tauri/src/commands.rs`                                                    | Tauri commands, task lifecycle, locks, caches, commit boundary                                                   |
+| `src-tauri/src/sql_diff_tests.rs`                                              | SQL/reference equivalence and comparison regression tests                                                        |
+| `src-tauri/src/validation.rs`                                                  | Filesystem integration tests and opt-in resource stress tests                                                    |
+| `src-tauri/src/storage_benchmark.rs`                                           | Opt-in synthetic storage/query benchmark, included by the validation module                                      |
+| `src-tauri/tauri.conf.json`                                                    | Desktop identity, static assets, window settings, installer configuration                                        |
+| `src-tauri/capabilities/default.json`                                          | Main-window Tauri capabilities                                                                                   |
+| `tests/frontend.test.cjs`                                                      | Node test runner and JSDOM interaction regressions with a mocked Tauri bridge                                    |
+| `tests/preview.cjs`, `tests/preview-fixture.js`                                | Development-only localhost UI preview with labeled demonstration data                                            |
+| `docs/validation-0.2.1.md`, `docs/validation-0.2.2.md`                         | Historical validation evidence and performance limitations                                                       |
 
 `target/`, `node_modules/`, and `src-tauri/gen/` are generated and ignored. Do not use generated files as the primary place to implement a feature. The production frontend asset directory is `frontend/`; do not place test fixtures, temporary logs, databases, or exported snapshots there.
 
@@ -84,23 +84,25 @@ The usual host shell is PowerShell. Quote paths containing spaces, use literal p
 
 ### Manual operations
 
-| Operation | Scan directory? | Save a history node? | Comparison/baseline behavior |
-| --- | --- | --- | --- |
-| Create | Yes | First node | Reject an already managed root; create the directory only on successful commit |
-| Check changes | Yes | No | Replace current scan state and compare against the selected default historical baseline |
-| Update snapshot | Yes | Yes | Append a node, set the new default baseline, and preserve the comparison against the preceding latest history for review |
-| Compare saved states | No | No | Compare selected sides in the chosen left-to-right direction |
-| View saved current state | No | No | Show the last successful scan with its timestamp; never imply live state |
+| Operation                | Scan directory? | Save a history node? | Comparison/baseline behavior                                                                                             |
+|--------------------------|-----------------|----------------------|--------------------------------------------------------------------------------------------------------------------------|
+| Create                   | Yes             | First node           | Reject an already managed root; create the directory only on successful commit                                           |
+| Check changes            | Yes             | No                   | Replace current scan state and compare against the selected default historical baseline                                  |
+| Update snapshot          | Yes             | Yes                  | Append a node, set the new default baseline, and preserve the comparison against the preceding latest history for review |
+| Compare saved states     | No              | No                   | Compare selected sides in the chosen left-to-right direction                                                             |
+| View saved current state | No              | No                   | Show the last successful scan with its timestamp; never imply live state                                                 |
 
 In code, scan modes are `create`, `check`, and `capture`. A historical node's recorded entries and identity are immutable, although its remark can be edited and the node can be deleted.
 
 Do not conflate the selected comparison's left side, the directory's persisted default baseline, its newest saved node, and its current scan state. After an update, the displayed before/after comparison intentionally differs from the newly selected default baseline. Preserve the explanatory notice.
 
+MD5 history can compare only with MD5 history; BLAKE3 states can compare only with BLAKE3 states. Enforce this in Rust and explain it in the UI. The first capture after MD5 saves a BLAKE3 baseline without a cross-algorithm diff. A check still creates no history and prompts for a capture. Do not rescan to convert immutable history or fabricate all-modified / unchanged results. Display the digest algorithm in history and details.
+
 Historical comparison works while the source directory is offline. Checking and updating require access to the source path. Reject cross-directory historical comparisons and selecting the same historical node on both sides. A reverse-time comparison is valid but must retain its direction and display the existing chronology warning.
 
 ### History management
 
-- Retention `0` means unlimited; positive values keep the latest N saved nodes. The UI offers all, latest, and a custom count.
+- Retention `0` means unlimited; positive values keep the latest N saved nodes. Once BLAKE3 history exists, automatic retention counts and prunes only BLAKE3 nodes, preserving MD5 history until explicit deletion. The retention preview must use exactly the same selection as capture/settings pruning. The UI offers all, latest, and a custom count.
 - Preview nodes that would be removed before applying a retention change. Use the existing confirmation flow for deletion.
 - During a capture, apply retention only after a complete state has been saved within the successful transaction. Failure or cancellation must not prune history.
 - Removing every historical node keeps the directory record. A later update can create its first history node again.
@@ -118,9 +120,10 @@ The target workload includes large directories and individual large files. Maint
 - Preserve progress for enumeration, hashing/scanning, comparison, saving, and completion. Include total byte progress and the current file's hashing progress.
 - Hash every included regular file. Equal size and modification time do not establish equal content; do not silently add a metadata-only shortcut.
 - The scanner reads in 256 KiB chunks and checks cancellation between reads. A blocked OS read cannot be forcibly interrupted by this token; do not promise instantaneous cancellation under every filesystem condition.
+- Hash separate files with scoped workers, bounded by available logical processors, regular-file count, and `MAX_HASH_WORKERS` (8). For a single large file, aggregate cancellable reads into at most 4 MiB and call the official `blake3::Hasher::update_rayon` for batches at least 1 MiB. All readers share one scan-local Rayon pool sized to available logical processors; small batches use `update`. Do not create a full CPU pool per file, alter the global Rayon pool, or substitute concatenated chunk hashes. Keep the bounded worker channel, coordinator-only throttled progress callbacks, and join all workers before returning success/error/cancellation. Progress includes all active readers without double-counting the displayed file; a retry resets its byte contribution. More readers can hurt rotational/network storage, so do not equate CPU saturation with throughput.
 - Retain the before/after metadata checks and one retry for a changing file. Persistent changes, unreadable files, inaccessible paths, and unsupported entries must fail the scan rather than silently producing a complete-looking partial snapshot.
 - Enumerate directories, including empty directories. Record relative paths using `/` and retain Unicode rather than silently replacing names.
-- Do not follow symbolic links, junctions, or Windows reparse points during traversal. Their recorded MD5 describes the link target path, not target file contents. Do not persist the target path text in place of its hash.
+- Do not follow symbolic links, junctions, or Windows reparse points during traversal. Their recorded BLAKE3 describes the link target path, not target file contents. Do not persist the target path text in place of its hash.
 - A scan is not an atomic filesystem snapshot and does not lock source files. Avoid stronger consistency claims than the implementation provides.
 - Complete scanning and its comparison before committing. Directory/state entries, references, activity, and retention changes belong in the transaction managed by `Store::commit_scan`.
 - Cancellation is accepted before the saving boundary. Once saving begins, the UI disables cancellation and explains that the operation is completing.
@@ -139,13 +142,13 @@ Store the effective rules in each newly captured state. When rules differ, compa
 
 ### Difference categories
 
-| Status | Meaning |
-| --- | --- |
-| `added` | Relative path exists only on the new side within the comparable scope |
-| `deleted` | Relative path exists only on the old side within the comparable scope |
-| `modified` | Same path has a changed entry kind or MD5 |
-| `moved` | An added/deleted pair has a unique matching size and MD5; this is a suspected move/rename |
-| `metadata` | Same path, kind, and hash, but relevant size or timestamp metadata changed |
+| Status     | Meaning                                                                                            |
+|------------|----------------------------------------------------------------------------------------------------|
+| `added`    | Relative path exists only on the new side within the comparable scope                              |
+| `deleted`  | Relative path exists only on the old side within the comparable scope                              |
+| `modified` | Same path has a changed entry kind or content hash                                                 |
+| `moved`    | An added/deleted pair has a unique matching size and content hash; this is a suspected move/rename |
+| `metadata` | Same path, kind, and hash, but relevant size or timestamp metadata changed                         |
 
 Do not present suspected moves as proven operations. Ambiguous hash matches remain additions/deletions. Directory timestamps are not content modifications; changing a child should not flood the result with modified ancestor directories. Metadata-only changes remain hidden by default.
 
@@ -173,12 +176,12 @@ Do not weaken synchronization or journaling for the persistent database to impro
 
 ### Versions and encoding
 
-- Database version: `entry_codec::DATABASE_VERSION`, currently 3, tracked with SQLite `user_version`.
-- Public snapshot JSON version: `models::CURRENT_SCHEMA_VERSION`, currently 2.
-- Archive envelope: `format: "snapdiff-archive"`, `schema_version: 2`.
+- Database version: `entry_codec::DATABASE_VERSION`, currently 4, tracked with SQLite `user_version`.
+- Public snapshot JSON version: `models::CURRENT_SCHEMA_VERSION`, currently 3.
+- Archive envelope: `format: "snapdiff-archive"`, `schema_version: 3`.
 - Application release version is independent of all three formats.
 
-Entries use `PRIMARY KEY(state_id, path) WITHOUT ROWID`. Non-directory MD5 values occupy 16-byte BLOBs internally and serialize as lowercase hexadecimal strings externally. Directory entries have no content hash. Modification times retain integer seconds and nanoseconds; do not round them through UI display strings. SQLite individual file sizes must fit its signed integer range, while difference sums use wider arithmetic where required. Preserve overflow checks and the custom aggregation rather than blindly replacing them with SQLite `SUM`.
+Entries use `PRIMARY KEY(state_id, path) WITHOUT ROWID`. Non-directory BLAKE3 values occupy 32-byte BLOBs internally and serialize as 64 lowercase hexadecimal characters in the public `hash` field. Legacy MD5 remains 16 bytes / 32 characters; the old JSON `md5` name is a read alias only. Snapshot schema 1/2 means MD5, schema 3 means BLAKE3; validate hash length against schema and preserve historical schema headers. Database version 3 upgrades transactionally by copying the old digest bytes unchanged into the generic `hash` column. Archive schema 2 and 3 are accepted; new exports use 3. Directory entries have no content hash. Modification times retain integer seconds and nanoseconds; do not round them through UI display strings. SQLite individual file sizes must fit its signed integer range, while difference sums use wider arithmetic where required. Preserve overflow checks and the custom aggregation rather than blindly replacing them with SQLite `SUM`.
 
 Database schema changes require explicit version handling and transactional migration, or an explicitly user-authorized reset of disposable data. The project is still in testing and storage rules may change substantially, but that is not standing permission to delete a user's existing data. Reject unsupported newer database formats instead of recreating the database.
 
@@ -209,7 +212,7 @@ Current limitations to remember when proposing optimizations:
 - Cross-history entry deduplication is not implemented.
 - Persistent-store operations share one connection and mutex.
 - Building a disk cache can be slower than an in-memory diff when most entries changed.
-- Strict MD5 scanning must read the included content, even though content is never stored.
+- Strict BLAKE3 scanning must read the included content, even though content is never stored.
 
 Benchmark the actual changed phase and describe time/memory tradeoffs. Do not extrapolate a synthetic metadata benchmark to a 200 GiB filesystem scan, or claim unlimited scale or constant memory.
 
@@ -219,15 +222,15 @@ Frontend modules share `window.SD` and load in order: `core.js`, `results.js`, `
 
 Tauri commands are registered in `src-tauri/src/lib.rs` and implemented in `commands.rs`. JavaScript invoke names are snake_case; argument objects use camelCase names such as `directoryId`, `taskId`, and `comparisonId`. Most returned Rust models use snake_case fields; `ScanRequest` and `DiffQuery` explicitly use camelCase serialization. Check the actual serde declarations rather than applying a blanket naming conversion.
 
-| Area | Commands |
-| --- | --- |
-| Directory overview | `list_directories`, `get_directory`, `validate_directory_path`, `get_storage_info` |
-| Database location | `migrate_database` (explicit confirmed relocation, no scan) |
-| Manual scan | `scan_directory`, `cancel_scan` |
-| History and activity | `list_history`, `select_baseline`, `get_activity`, `set_remark`, `delete_nodes` |
-| Settings | `preview_retention`, `update_settings`, `set_focus_patterns`, `delete_directory` |
-| Comparison/results | `compare_states`, `query_diff`, `get_report`, `export_report`, `get_diff_paths` |
-| Metadata exchange | `export_snapshots`, `preview_import`, `import_snapshots` |
+| Area                 | Commands                                                                           |
+|----------------------|------------------------------------------------------------------------------------|
+| Directory overview   | `list_directories`, `get_directory`, `validate_directory_path`, `get_storage_info` |
+| Database location    | `migrate_database` (explicit confirmed relocation, no scan)                        |
+| Manual scan          | `scan_directory`, `cancel_scan`                                                    |
+| History and activity | `list_history`, `select_baseline`, `get_activity`, `set_remark`, `delete_nodes`    |
+| Settings             | `preview_retention`, `update_settings`, `set_focus_patterns`, `delete_directory`   |
+| Comparison/results   | `compare_states`, `query_diff`, `get_report`, `export_report`, `get_diff_paths`    |
+| Metadata exchange    | `export_snapshots`, `preview_import`, `import_snapshots`                           |
 
 For an interface change, update Rust arguments/models, registration, frontend callers, test mocks, and documentation together. Keep read/query commands separate from mutations. Validate mutations on the backend even when the UI disables their buttons.
 
@@ -273,7 +276,7 @@ npm run tauri dev
 
 There is no `npm run build` script. Tauri embeds `frontend/` directly.
 
-Keep rusqlite's `fallible_uint` feature enabled for checked `u64`/`usize` SQLite reads. Its progress-handler API requires a mutable connection and returns a result; preserve cancellation-hook cleanup when updating the dependency. MD5 output is encoded from bytes as lowercase hexadecimal because md-5 0.11 digest arrays do not implement `LowerHex`.
+Keep rusqlite's `fallible_uint` feature enabled for checked `u64`/`usize` SQLite reads. Its progress-handler API requires a mutable connection and returns a result; preserve cancellation-hook cleanup when updating the dependency. BLAKE3 output uses `finalize().to_hex()`; the crate has the `rayon` feature enabled and the scanner explicitly calls `update_rayon` for multicore hashing.
 
 ### Choose checks appropriate to the change
 
@@ -323,6 +326,7 @@ Stress tests are opt-in and create real files or large synthetic data. Do not ru
 cargo test --release --lib stress_storage_queries -- --ignored --nocapture --test-threads=1
 cargo test --release --lib validation::stress_many_files_and_history -- --ignored --nocapture --test-threads=1
 cargo test --release --lib validation::stress_large_file -- --ignored --nocapture --test-threads=1
+cargo test --release --lib scanner::tests::benchmark_parallel_hashing -- --ignored --nocapture --test-threads=1
 ```
 
 Configuration variables and defaults:
@@ -331,9 +335,12 @@ Configuration variables and defaults:
 | --- | --- | --- | --- |
 | `SNAPDIFF_STORAGE_FILES` | 100,000 | 1,000,000 | Synthetic metadata storage/comparison benchmark |
 | `SNAPDIFF_STRESS_FILES` | 20,000 | 200,000 | Real small-file scan/history test |
-| `SNAPDIFF_STRESS_GIB` | 1 | 200 | Real large-file write and MD5 scan |
+| `SNAPDIFF_STRESS_GIB` | 1 | 200 | Real large-file write and BLAKE3 scan |
 
 These tests use `tempfile` data and should never target a user's game or work directory. Restore any environment variables changed for a test. Published timings must include workload, hardware/context, included phases, and limitations. See the existing validation documents for historical measurements; do not report them as fresh results.
+
+`benchmark_parallel_hashing` creates eight 64 MiB files (512 MiB total), warms the OS cache, then measures one file and all eight files with one versus CPU-count BLAKE3 threads and bounded parallel readers. It checks identical metadata/digests. It excludes enumeration, persistent storage, and UI costs and is not a cold-disk measurement.
+Current measurements and limits are in `BLAKE3-VALIDATION.md`; `MD5-VALIDATION.md` is superseded historical evidence only.
 
 ## Releases and completion reporting
 

@@ -9,12 +9,12 @@ const clone = value => JSON.parse(JSON.stringify(value));
 const turn = () => new Promise(resolve => setImmediate(resolve));
 const summary = (id, time = '2026-10-12T01:00:00Z') => ({
   id, directory_id: 'dir', created_time: time, scan_started_time: time, file_count: 4,
-  directory_count: 1, total_size: 1024, remark: '', directory_entries_complete: true,
+  directory_count: 1, total_size: 1024, hash_algorithm: 'blake3', remark: '', directory_entries_complete: true,
 });
 const older = summary('older', '2026-10-11T01:00:00Z'), latest = summary('latest');
-const entry = relative_path => ({ relative_path, kind: 'file', size: 1024, modified_time: latest.created_time, md5: 'a'.repeat(32) });
+const entry = relative_path => ({ relative_path, kind: 'file', size: 1024, modified_time: latest.created_time, hash: 'a'.repeat(64) });
 
-async function app({ current = true, rowCount = 1, available = true, startupDirectoryRead, validateDroppedPath, migrateDatabase } = {}) {
+async function app({ current = true, rowCount = 1, available = true, startupDirectoryRead, validateDroppedPath, migrateDatabase, compareStates, algorithm = 'blake3' } = {}) {
   const dom = new JSDOM(fs.readFileSync(path.join(root, 'frontend/index.html'), 'utf8'), { runScripts: 'outside-only', url: 'http://localhost' });
   const { window } = dom;
   await new Promise(resolve => window.document.readyState === 'loading' ? window.document.addEventListener('DOMContentLoaded', resolve, { once: true }) : resolve());
@@ -27,9 +27,10 @@ async function app({ current = true, rowCount = 1, available = true, startupDire
     current_types: { '.bin': { count: 4, size: 1024 } }, available,
   };
   let directories = [directory], nodes = [clone(latest), clone(older)], pending;
+  for (const node of [directory.latest, directory.current, ...nodes]) if (node) node.hash_algorithm = algorithm;
   const calls = [], listeners = {}, rows = Array.from({ length: rowCount }, (_, n) => ({
     path: n === 0 ? 'mods/<img onerror="bad">.bin' : 'mods/' + n + '.bin',
-    status: 'added', old: null, new: entry(n === 0 ? 'mods/<img onerror="bad">.bin' : 'mods/' + n + '.bin'), size_delta: 1024, focused: false,
+    status: 'added', old: null, new: { ...entry(n === 0 ? 'mods/<img onerror="bad">.bin' : 'mods/' + n + '.bin'), hash: 'a'.repeat(algorithm === 'md5' ? 32 : 64) }, size_delta: 1024, focused: false,
   }));
   const comparison = (old, next, targetCurrent) => ({
     id: 'comparison-' + old.id + '-' + next.id, directory_id: 'dir', old: clone(old), new: clone(next), target_current: targetCurrent,
@@ -59,6 +60,7 @@ async function app({ current = true, rowCount = 1, available = true, startupDire
         case 'scan_directory': return new Promise((resolve, reject) => { pending = { resolve, reject, request: args.request }; });
         case 'cancel_scan': pending.reject('扫描已取消'); return;
         case 'compare_states': {
+          if (compareStates) return compareStates(args);
           const old = nodes.find(n => n.id === args.oldId);
           const next = args.newId ? nodes.find(n => n.id === args.newId) : directory.current;
           lastComparison = comparison(old, next, !args.newId); return lastComparison;
@@ -98,13 +100,13 @@ async function app({ current = true, rowCount = 1, available = true, startupDire
   const result = {
     window, calls, listeners, el: id => window.document.getElementById(id), close: () => window.close(),
     get pending() { return pending; },
-    async completeScan() {
+    async completeScan({ notice = null } = {}) {
       const request = pending.request, saved = request.mode !== 'check', newNode = summary('scanned', '2026-10-12T02:00:00Z');
       const old = clone(latest);
       directory.current = clone(newNode); directory.current_id = newNode.id;
       if (saved) { nodes.unshift(newNode); directory.baseline_id = newNode.id; directory.latest = newNode; directory.history_count++; }
-      lastComparison = comparison(old, newNode, !saved);
-      pending.resolve({ directory_id: directory.id, state: clone(newNode), comparison: lastComparison, saved, pruned: 0 });
+      lastComparison = notice ? null : comparison(old, newNode, !saved);
+      pending.resolve({ directory_id: directory.id, state: clone(newNode), comparison: lastComparison, notice, saved, pruned: 0 });
       await turn(); await turn(); await turn();
     },
   };
@@ -412,6 +414,71 @@ test('capture appends a node, selects it as default, and leaves the before/after
     assert.equal(a.window.SD.state.comparison.new.id, 'scanned');
     assert.equal(a.el('target-select').value, 'scanned');
     assert.match(a.el('update-notice').textContent, /保留本次更新前后的差异/);
+  } finally { a.close(); }
+});
+
+test('algorithm transition preserves old history and shows the scan notice without a false comparison', async () => {
+  for (const mode of ['check', 'capture']) {
+    const a = await app({ algorithm: 'md5' });
+    try {
+      await a.window.SD.app.openDirectory('dir');
+      const comparisons = a.calls.filter(c => c.cmd === 'compare_states').length;
+      const notice = mode === 'check' ? '本次已使用 BLAKE3 扫描，请更新快照建立 BLAKE3 基准。' : '已保存 BLAKE3 基准，原 MD5 历史保留。';
+      a.el(mode === 'check' ? 'check-btn' : 'capture-btn').click(); await turn();
+      await a.completeScan({ notice });
+      assert.equal(a.window.SD.state.history.length, mode === 'check' ? 2 : 3);
+      assert.equal(a.window.SD.state.directory.baseline_id, mode === 'check' ? 'latest' : 'scanned');
+      assert.equal(a.window.SD.state.directory.current.hash_algorithm, 'blake3');
+      assert.equal(a.window.SD.state.history.find(n => n.id === 'latest').hash_algorithm, 'md5');
+      assert.equal(a.el('update-notice').textContent, notice);
+      assert.equal(a.el('workspace-empty').textContent, notice);
+      assert(a.el('diff-section').classList.contains('hidden'));
+      assert.equal(a.calls.filter(c => c.cmd === 'compare_states').length, comparisons);
+      a.window.SD.state.oldId = 'latest'; a.window.SD.state.target = 'current';
+      await a.window.SD.app.compare();
+      assert.match(a.el('workspace-empty').textContent, /不能比较/);
+      assert.match(a.el('comparison-hint').textContent, /摘要算法不同/);
+      assert.equal(a.calls.filter(c => c.cmd === 'compare_states').length, comparisons);
+      a.window.SD.state.oldId = 'older'; a.window.SD.state.target = 'latest';
+      await a.window.SD.app.compare();
+      assert.equal(a.calls.filter(c => c.cmd === 'compare_states').length, comparisons + 1);
+      assert.match(a.el('diff-list').textContent, /MD5（历史）/);
+    } finally { a.close(); }
+  }
+});
+
+test('switching to an incompatible algorithm releases a pending comparison and ignores its late response', async () => {
+  let finish;
+  const a = await app({ compareStates: () => new Promise(resolve => { finish = resolve; }) });
+  try {
+    await a.window.SD.app.openDirectory('dir', false);
+    const state = a.window.SD.state;
+    state.oldId = 'older'; state.target = 'latest';
+    const pending = a.window.SD.app.compare();
+    assert.equal(state.compareLoading, true);
+    state.directory.current.hash_algorithm = 'md5';
+    state.target = 'current';
+    await a.window.SD.app.compare();
+    assert.equal(state.compareLoading, false);
+    assert.match(a.el('workspace-empty').textContent, /不能比较/);
+    finish({ id: 'stale' });
+    await pending;
+    assert.equal(state.comparison, null);
+    assert.equal(a.calls.filter(c => c.cmd === 'query_diff').length, 0);
+    assert.equal(a.el('target-select').disabled, false);
+    assert.equal(a.el('check-btn').disabled, false);
+  } finally { a.close(); }
+});
+
+test('new digest details display the complete BLAKE3 value', async () => {
+  const a = await app();
+  try {
+    await a.window.SD.app.openDirectory('dir');
+    a.window.SD.state.oldId = 'older'; a.window.SD.state.target = 'latest';
+    await a.window.SD.app.compare();
+    assert.match(a.el('diff-list').textContent, /BLAKE3/);
+    assert(a.el('diff-list').textContent.includes('a'.repeat(64)));
+    assert(!a.el('diff-list').textContent.includes('MD5'));
   } finally { a.close(); }
 });
 

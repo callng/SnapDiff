@@ -15,7 +15,7 @@ fn legacy_insert(conn: &mut Connection, node: &Snapshot) {
                 crate::entry_codec::kind_name(e.kind),
                 e.size as i64,
                 e.modified_time.to_rfc3339(),
-                e.md5
+                e.hash
             ])
             .unwrap();
     }
@@ -26,7 +26,7 @@ fn legacy_read(conn: &Connection, header: &Snapshot) -> Snapshot {
     let mut result = header.header();
     let mut stmt = conn
         .prepare(
-            "SELECT path,kind,size,modified_time,md5 FROM entries WHERE state_id=?1 ORDER BY path",
+            "SELECT path,kind,size,modified_time,hash FROM entries WHERE state_id=?1 ORDER BY path",
         )
         .unwrap();
     let mut rows = stmt.query([&header.id]).unwrap();
@@ -38,7 +38,7 @@ fn legacy_read(conn: &Connection, header: &Snapshot) -> Snapshot {
             modified_time: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(3).unwrap())
                 .unwrap()
                 .with_timezone(&chrono::Utc),
-            md5: row.get(4).unwrap(),
+            hash: row.get(4).unwrap(),
         });
     }
     result
@@ -53,7 +53,7 @@ fn stress_storage_queries() {
         let legacy_path = legacy_data.path().join("legacy.sqlite3");
         let mut legacy = Connection::open(&legacy_path).unwrap();
         legacy.execute_batch("PRAGMA journal_mode=WAL;
-            CREATE TABLE entries(state_id TEXT NOT NULL,path TEXT NOT NULL,kind TEXT NOT NULL,size INTEGER NOT NULL,modified_time TEXT NOT NULL,md5 TEXT NOT NULL,PRIMARY KEY(state_id,path));").unwrap();
+            CREATE TABLE entries(state_id TEXT NOT NULL,path TEXT NOT NULL,kind TEXT NOT NULL,size INTEGER NOT NULL,modified_time TEXT NOT NULL,hash TEXT NOT NULL,PRIMARY KEY(state_id,path));").unwrap();
         let config = storage::new_config("C:/synthetic-storage-test", &[]);
         let time = chrono::DateTime::parse_from_rfc3339("2026-10-12T00:00:00.123456789Z")
             .unwrap()
@@ -66,7 +66,7 @@ fn stress_storage_queries() {
                     kind: EntryKind::File,
                     size: (i + 10) as u64,
                     modified_time: time + chrono::Duration::seconds(i as i64),
-                    md5: format!("{i:032x}"),
+                    hash: format!("{i:064x}"),
                 })
                 .collect(),
         );
@@ -76,7 +76,7 @@ fn stress_storage_queries() {
         new.id = uuid::Uuid::new_v4().to_string();
         let changed = count * percent / 100;
         for e in new.files.iter_mut().take(changed) {
-            e.md5 = "f".repeat(32);
+            e.hash = "f".repeat(64);
         }
         let start = Instant::now();
         legacy_insert(&mut legacy, &old);

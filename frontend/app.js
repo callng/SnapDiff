@@ -59,22 +59,29 @@ SD.app = (() => {
     if (!s.directory) return;
     const old = s.history.find(n => n.id === s.oldId) || (s.comparison?.old.id === s.oldId ? s.comparison.old : null);
     $('baseline-time').textContent = old ? date(old.created_time) : '尚未选择历史基准';
-    $('baseline-meta').textContent = old ? old.file_count.toLocaleString() + ' 个文件 · ' + bytes(old.total_size) + (old.remark ? ' · ' + old.remark : '') : '保存第一张快照后即可比较';
+    $('baseline-meta').textContent = old ? old.file_count.toLocaleString() + ' 个文件 · ' + bytes(old.total_size) + (old.hash_algorithm === 'md5' ? ' · MD5（历史）' : ' · BLAKE3') + (old.remark ? ' · ' + old.remark : '') : '保存第一张快照后即可比较';
     $('target-select').innerHTML = '<option value="current">当前扫描状态' + (s.directory.current ? ' · ' + esc(date(s.directory.current.created_time)) : ' · 尚未扫描') + '</option>' + s.history.map(node => '<option value="' + esc(node.id) + '">' + esc(date(node.created_time)) + (node.id === s.history[0]?.id ? ' · 最新历史' : '') + (node.remark ? ' · ' + esc(node.remark) : '') + '</option>').join('');
     $('target-select').value = s.target;
     const next = s.target === 'current' ? s.directory.current : s.history.find(n => n.id === s.target);
-    $('target-meta').textContent = next ? next.file_count.toLocaleString() + ' 个文件 · ' + bytes(next.total_size) : s.directory.available ? '点击“检查变化”读取当前目录' : '请选择一个历史节点作为对照';
+    $('target-meta').textContent = next ? next.file_count.toLocaleString() + ' 个文件 · ' + bytes(next.total_size) + (next.hash_algorithm === 'md5' ? ' · MD5（历史）' : ' · BLAKE3') : s.directory.available ? '点击“检查变化”读取当前目录' : '请选择一个历史节点作为对照';
+    const algorithmChanged = old?.hash_algorithm && next?.hash_algorithm && old.hash_algorithm !== next.hash_algorithm;
     const reverse = old && next && new Date(old.created_time) > new Date(next.created_time);
-    $('comparison-hint').textContent = (s.target === 'current' ? '当前状态是上次扫描结果，并非实时状态。检查变化不会新增历史节点。' : '历史节点之间的比较不读取目录文件。') + (reverse ? ' 当前为反向比较：基准时间晚于对照时间。' : '');
+    $('comparison-hint').textContent = (s.target === 'current' ? '当前状态是上次扫描结果，并非实时状态。检查变化不会新增历史节点。' : '历史节点之间的比较不读取目录文件。') + (reverse ? ' 当前为反向比较：基准时间晚于对照时间。' : '') + (algorithmChanged ? ' 两侧摘要算法不同，不能比较内容。' : '');
     syncBusy();
   }
   async function compare() {
     const directoryId = s.directory?.id;
     const request = ++s.compareRequest, oldId = s.oldId, target = s.target;
+    s.compareLoading = false;
     if (!directoryId || !oldId || (target === 'current' && !s.directory.current)) {
       SD.results.clear();
       $('workspace-empty').textContent = !oldId ? '还没有历史基准。点击更新快照保存第一个时间节点。' : s.directory.available ? '还没有当前扫描状态。点击检查变化，或选择另一个历史节点作为对照。' : '该目录暂无当前扫描状态，请选择历史节点进行离线比较。';
       renderSides(); return;
+    }
+    const oldState = s.history.find(n => n.id === oldId);
+    const nextState = target === 'current' ? s.directory.current : s.history.find(n => n.id === target);
+    if (oldState?.hash_algorithm && nextState?.hash_algorithm && oldState.hash_algorithm !== nextState.hash_algorithm) {
+      SD.results.clear(); $('workspace-empty').textContent = 'MD5 历史与 BLAKE3 状态不能比较内容，请更新快照建立 BLAKE3 基准；旧历史会保留。'; renderSides(); return;
     }
     if (oldId === target) {
       SD.results.clear(); $('workspace-empty').textContent = '基准和对照是同一个时间节点，请选择另一个节点。'; renderSides(); return;
@@ -157,6 +164,9 @@ SD.app = (() => {
         if (result.comparison) {
           await SD.results.display(result.comparison);
           if (result.saved) SD.notice('update-notice', '已保存新时间节点，默认基准已更新。下方保留本次更新前后的差异。' + (result.pruned ? ' 已按保留规则清理 ' + result.pruned + ' 个旧节点。' : ''));
+        } else if (result.notice) {
+          SD.notice('update-notice', result.notice);
+          $('workspace-empty').textContent = result.notice;
         } else { await compare(); }
       }
       toast(result.saved ? '新时间节点已保存' : '检查完成，未新增历史节点');

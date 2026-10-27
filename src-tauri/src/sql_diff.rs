@@ -131,6 +131,7 @@ impl SqlComparison {
         cancel: Option<Arc<AtomicBool>>,
         staged: bool,
     ) -> Result<Self, String> {
+        old.ensure_comparable(new)?;
         checkpoint(cancel.as_ref())?;
         if old.directory_id != new.directory_id {
             return Err("只能比较同一个目录的状态".into());
@@ -173,7 +174,7 @@ impl SqlComparison {
         let new_table = if staged {
             sql(source.execute_batch("DROP TABLE IF EXISTS temp.scan_entries;
                 CREATE TEMP TABLE scan_entries(state_id TEXT NOT NULL,path TEXT NOT NULL,kind TEXT NOT NULL,size INTEGER NOT NULL,
-                modified_seconds INTEGER NOT NULL,modified_nanos INTEGER NOT NULL,md5 BLOB NOT NULL,PRIMARY KEY(state_id,path)) WITHOUT ROWID;"))?;
+                modified_seconds INTEGER NOT NULL,modified_nanos INTEGER NOT NULL,hash BLOB NOT NULL,PRIMARY KEY(state_id,path)) WITHOUT ROWID;"))?;
             sql(source.execute_batch("SAVEPOINT scan_stage"))?;
             for chunk in new.files.chunks(512) {
                 checkpoint(cancel.as_ref())?;
@@ -196,7 +197,7 @@ impl SqlComparison {
                 search_path TEXT NOT NULL,search_old TEXT NOT NULL,status INTEGER NOT NULL,
                 focused INTEGER NOT NULL,delta INTEGER NOT NULL,abs_delta INTEGER NOT NULL,
                 seconds INTEGER NOT NULL,nanos INTEGER NOT NULL,kind TEXT NOT NULL,
-                size INTEGER NOT NULL,md5 BLOB NOT NULL);
+                size INTEGER NOT NULL,hash BLOB NOT NULL);
             CREATE TABLE details(id INTEGER PRIMARY KEY REFERENCES changes(id) ON DELETE CASCADE,payload TEXT NOT NULL);
             CREATE TEMP TABLE tree_key(value TEXT);
             BEGIN;"))?;
@@ -253,7 +254,7 @@ impl SqlComparison {
             let status = match (&old_entry, &new_entry) {
                 (None, _) => DiffStatus::Added,
                 (_, None) => DiffStatus::Deleted,
-                (Some(o), Some(n)) if o.kind != n.kind || o.md5 != n.md5 => DiffStatus::Modified,
+                (Some(o), Some(n)) if o.kind != n.kind || o.hash != n.hash => DiffStatus::Modified,
                 (_, Some(n)) if n.kind == EntryKind::Directory => continue,
                 _ => DiffStatus::Metadata,
             };
@@ -277,10 +278,10 @@ impl SqlComparison {
         ), params![old.id, new.id], |r| r.get(0)))?
         };
 
-        sql(conn.execute_batch("CREATE INDEX move_hash ON changes(status,kind,size,md5);
+        sql(conn.execute_batch("CREATE INDEX move_hash ON changes(status,kind,size,hash);
             CREATE TEMP TABLE moves AS
             SELECT MIN(CASE WHEN status=0 THEN id END) added,MIN(CASE WHEN status=1 THEN id END) deleted
-            FROM changes WHERE status IN (0,1) AND kind='file' GROUP BY size,md5
+            FROM changes WHERE status IN (0,1) AND kind='file' GROUP BY size,hash
             HAVING SUM(status=0)=1 AND SUM(status=1)=1;"))?;
         // Scan the immutable pairing table. Mutating a table traversed by a
         // live SELECT can otherwise revisit/skip records in SQLite.
@@ -366,12 +367,12 @@ impl SqlComparison {
         let entry = row.new.as_ref().or(row.old.as_ref()).unwrap();
         let old_path = row.old.as_ref().map_or("", |e| e.relative_path.as_str());
         let delta = i64::try_from(row.size_delta).map_err(|_| "差异大小超出范围")?;
-        sql(conn.prepare_cached("INSERT INTO changes(path,old_path,old_kind,search_path,search_old,status,focused,delta,abs_delta,seconds,nanos,kind,size,md5)
+        sql(conn.prepare_cached("INSERT INTO changes(path,old_path,old_kind,search_path,search_old,status,focused,delta,abs_delta,seconds,nanos,kind,size,hash)
             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)"))?.execute(params![
                 row.path, old_path, row.old.as_ref().map_or("file",|e|entry_codec::kind_name(e.kind)), row.path.to_lowercase(), old_path.to_lowercase(), status_number(row.status), row.focused,
                 delta, delta.abs(), entry.modified_time.timestamp(), entry.modified_time.timestamp_subsec_nanos(),
                 entry_codec::kind_name(entry.kind), i64::try_from(entry.size).map_err(|_| "文件大小超出范围")?,
-                entry_codec::hash_bytes(&entry.md5)?
+                entry_codec::hash_bytes(&entry.hash)?
             ]).map_err(|e| e.to_string())?;
         sql(conn.prepare_cached("INSERT INTO details(id,payload) VALUES(?1,?2)"))?
             .execute(params![conn.last_insert_rowid(), payload(row)?])
@@ -606,8 +607,13 @@ impl SqlComparison {
         for (label, entry) in [("旧", &row.old), ("新", &row.new)] {
             if let Some(e) = entry {
                 text.push_str(&format!(
-                    "  {label}: {} | {:?} | {} bytes | {} | MD5 {}\n",
-                    e.relative_path, e.kind, e.size, e.modified_time, e.md5
+                    "  {label}: {} | {:?} | {} bytes | {} | {} {}\n",
+                    e.relative_path,
+                    e.kind,
+                    e.size,
+                    e.modified_time,
+                    e.hash_label(),
+                    e.hash
                 ));
             }
         }

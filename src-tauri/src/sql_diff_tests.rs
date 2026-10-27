@@ -10,14 +10,14 @@ fn file(path: &str, key: u32) -> FileEntry {
         modified_time: Utc
             .timestamp_opt(1_700_000_000 + key as i64, 123_456_789)
             .unwrap(),
-        md5: format!("{key:032x}"),
+        hash: format!("{key:064x}"),
     }
 }
 fn directory(path: &str) -> FileEntry {
     let mut e = file(path, 0);
     e.kind = EntryKind::Directory;
     e.size = 0;
-    e.md5.clear();
+    e.hash.clear();
     e
 }
 fn snapshots() -> (Snapshot, Snapshot) {
@@ -51,14 +51,14 @@ fn snapshots() -> (Snapshot, Snapshot) {
             e.modified_time += chrono::Duration::nanoseconds(1);
         }
         if e.relative_path == "modified" {
-            e.md5 = format!("{:032x}", 999);
+            e.hash = format!("{:064x}", 999);
             e.size += 17;
         }
         if e.relative_path == "type" {
             e.kind = EntryKind::Symlink;
         }
         if e.relative_path.starts_with("中文/") {
-            e.md5 = format!("{:032x}", 999);
+            e.hash = format!("{:064x}", 999);
         }
         if e.relative_path == "folder" {
             e.modified_time += chrono::Duration::hours(1);
@@ -226,6 +226,10 @@ fn changed_scope_legacy_structure_and_staged_scan_match_reference() {
         new.effective_ignore_patterns = vec!["duplicate/".into(), "/type/".into()];
         if legacy {
             old.schema_version = 1;
+            new.schema_version = 2;
+            for entry in old.files.iter_mut().chain(new.files.iter_mut()) {
+                entry.hash.truncate(32);
+            }
             old.directory_entries_complete = false;
         }
         let (_temp, mut store) = persisted(&mut old, &mut new);

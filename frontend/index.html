@@ -24,7 +24,7 @@
   <div class="app-shell" inert aria-busy="true">
     <header class="topbar">
       <button id="brand-home" class="brand" aria-label="返回目录列表"><span class="brand-mark">S</span><span><strong>SnapDiff</strong><small>目录状态 · 时间节点 · 差异</small></span></button>
-      <div class="topbar-right"><button id="storage-btn" class="button secondary small">数据库位置</button><span class="local-badge"><span class="dot"></span> 本地记录</span><span class="version">0.2.6</span></div>
+      <div class="topbar-right"><button id="storage-btn" class="button secondary small">数据库位置</button><span class="local-badge"><span class="dot"></span> 本地记录</span><span class="version">0.3.0</span></div>
     </header>
     <div id="app-error" class="notice error hidden" role="alert"></div>
     <main>
@@ -100,6 +100,7 @@
       <p class="footnote">只影响结果筛选与标记，不自动监控文件。</p>
       <label>历史保留<select id="retention-mode"><option value="all">保留全部</option><option value="latest">仅保留最近一次</option><option value="custom">保留最近 N 次</option></select></label>
       <label id="retention-number-field" class="hidden">保留数量<input id="retention-number" type="number" min="1" max="100000" value="10" /></label>
+      <p class="footnote">已有 BLAKE3 历史时，数量限制只作用于 BLAKE3 节点；旧 MD5 历史可在历史窗口手动删除。</p>
       <div class="settings-bottom"><button id="export-directory-btn" type="button" class="text-button">导出目录全部历史</button><button id="delete-directory-btn" type="button" class="text-button danger-text">移除目录记录</button></div>
       <div class="modal-actions"><button type="button" class="button secondary" data-close="settings-modal">取消</button><button id="save-settings-btn" type="submit" class="button primary">保存设置</button></div>
     </form>
@@ -137,8 +138,8 @@
       <div id="total-progress-track" class="progress-track" role="progressbar" aria-label="总扫描进度" aria-valuemin="0" aria-valuemax="100"><div id="progress-bar" class="progress-bar"></div></div>
     </div>
     <div id="file-progress" class="scan-progress hidden">
-      <div class="progress-summary"><span>当前文件 · MD5</span><span class="progress-values"><span id="file-progress-size"></span><span id="file-progress-percent"></span></span></div>
-      <div id="file-progress-track" class="progress-track file-progress-track" role="progressbar" aria-label="当前文件 MD5 进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="file-progress-bar" class="progress-bar"></div></div>
+      <div class="progress-summary"><span>当前文件 · BLAKE3</span><span class="progress-values"><span id="file-progress-size"></span><span id="file-progress-percent"></span></span></div>
+      <div id="file-progress-track" class="progress-track file-progress-track" role="progressbar" aria-label="当前文件 BLAKE3 进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="file-progress-bar" class="progress-bar"></div></div>
     </div>
     <div id="current-file" class="current-file"></div>
   </section>

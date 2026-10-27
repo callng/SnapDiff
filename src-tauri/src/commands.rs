@@ -242,6 +242,21 @@ fn run_scan(
             ..Default::default()
         },
     );
+    let mut notice = None;
+    let old_id = if let Some(id) = old_id {
+        if lock(&backend.store)?.scan_hash_matches(&id, &snapshot)? {
+            Some(id)
+        } else {
+            notice = Some(if saved {
+                "已保存 BLAKE3 基准，原 MD5 历史保留；不同算法不生成内容差异，下次扫描起可正常比较。"
+            } else {
+                "本次已使用 BLAKE3 扫描，原 MD5 历史保留；请更新快照建立 BLAKE3 基准后再比较。"
+            }.to_string());
+            None
+        }
+    } else {
+        None
+    };
     let comparison = if let Some(id) = old_id {
         job.checkpoint()?;
         Some(lock(&backend.store)?.compare_scan(
@@ -279,6 +294,7 @@ fn run_scan(
         },
     );
     Ok(ScanResult {
+        notice,
         directory_id: config.id,
         state: snapshot.summary(),
         comparison,

@@ -107,14 +107,25 @@ fn insert_state(conn: &Connection, snapshot: &Snapshot, saved: bool) -> Result<(
     entry_codec::insert_entries(conn, "entries", &snapshot.id, &snapshot.files)
 }
 
+fn prunable_nodes(
+    nodes: &[SnapshotSummary],
+    retention: usize,
+) -> impl Iterator<Item = &SnapshotSummary> {
+    let has_blake3 = nodes.iter().any(|node| node.hash_algorithm == "blake3");
+    // Once BLAKE3 history exists, automatic retention only counts BLAKE3 nodes.
+    // Legacy MD5 history remains available until the user explicitly deletes it.
+    nodes
+        .iter()
+        .filter(move |node| retention > 0 && (!has_blake3 || node.hash_algorithm == "blake3"))
+        .skip(retention)
+}
+
 fn prune(conn: &Connection, config: &mut DirectoryConfig) -> Result<usize, String> {
     if config.retention == 0 {
         return Ok(0);
     }
     let nodes = history(conn, &config.id)?;
-    let removed: Vec<_> = nodes
-        .iter()
-        .skip(config.retention)
+    let removed: Vec<_> = prunable_nodes(&nodes, config.retention)
         .map(|n| n.id.clone())
         .collect();
     for id in &removed {
@@ -477,6 +488,10 @@ impl Store {
         SqlComparison::build(&mut self.conn, &old, &new, current, focus, None, false)
     }
 
+    pub fn scan_hash_matches(&self, old_id: &str, new: &Snapshot) -> Result<bool, String> {
+        Ok(read_header(&self.conn, old_id)?.hash_algorithm() == new.hash_algorithm())
+    }
+
     pub fn compare_scan(
         &mut self,
         old_id: &str,
@@ -567,11 +582,7 @@ impl Store {
             return Err("保留数量不能超过 100000".into());
         }
         let nodes = self.history(id)?;
-        Ok(if retention == 0 {
-            vec![]
-        } else {
-            nodes.into_iter().skip(retention).collect()
-        })
+        Ok(prunable_nodes(&nodes, retention).cloned().collect())
     }
 
     pub fn update_settings(
@@ -793,7 +804,7 @@ impl Store {
         }
         Ok(SnapshotArchive {
             format: "snapdiff-archive".into(),
-            schema_version: 2,
+            schema_version: CURRENT_SCHEMA_VERSION,
             exported_time: Utc::now(),
             directories,
             snapshots,
@@ -831,7 +842,7 @@ impl Store {
         atomic_write(path, |writer| {
             let mut header = serde_json::to_value(SnapshotArchive {
                 format: "snapdiff-archive".into(),
-                schema_version: 2,
+                schema_version: CURRENT_SCHEMA_VERSION,
                 exported_time: Utc::now(),
                 directories,
                 snapshots: vec![],
@@ -1005,13 +1016,15 @@ fn prepare_snapshot(snapshot: &mut Snapshot) -> Result<(), String> {
             return Err(format!("快照包含重复路径: {path}"));
         }
         if entry.kind == EntryKind::Directory {
-            if entry.size != 0 || !entry.md5.is_empty() {
+            if entry.size != 0 || !entry.hash.is_empty() {
                 return Err(format!("目录条目格式错误: {path}"));
             }
-        } else if entry.md5.len() != 32 || !entry.md5.bytes().all(|b| b.is_ascii_hexdigit()) {
-            return Err(format!("快照包含无效 MD5: {path}"));
+        } else if entry.hash.len() != if snapshot.schema_version >= 3 { 64 } else { 32 }
+            || !entry.hash.bytes().all(|b| b.is_ascii_hexdigit())
+        {
+            return Err(format!("快照包含无效摘要: {path}"));
         }
-        entry.md5.make_ascii_lowercase();
+        entry.hash.make_ascii_lowercase();
     }
     IgnoreMatcher::from_patterns(&snapshot.ignore_patterns)?;
     if snapshot.schema_version == 1 && snapshot.effective_ignore_patterns.is_empty() {
@@ -1025,7 +1038,7 @@ fn prepare_snapshot(snapshot: &mut Snapshot) -> Result<(), String> {
 }
 
 fn validate_archive(archive: &SnapshotArchive) -> Result<(), String> {
-    if archive.format != "snapdiff-archive" || archive.schema_version != 2 {
+    if archive.format != "snapdiff-archive" || !matches!(archive.schema_version, 2 | 3) {
         return Err("不支持的快照数据格式".into());
     }
     if archive.snapshots.is_empty() {
@@ -1060,7 +1073,7 @@ pub fn read_archive(path: &Path) -> Result<SnapshotArchive, String> {
             serde_json::from_value(value).map_err(|e| format!("快照格式错误: {e}"))?;
         SnapshotArchive {
             format: "snapdiff-archive".into(),
-            schema_version: 2,
+            schema_version: CURRENT_SCHEMA_VERSION,
             exported_time: Utc::now(),
             directories: vec![],
             snapshots: vec![snapshot],
@@ -1218,7 +1231,7 @@ mod tests {
             kind: EntryKind::File,
             size: 0,
             modified_time: Utc::now(),
-            md5: "a".repeat(32),
+            hash: "a".repeat(32),
         });
         assert!(target.import_archive(&invalid).is_err());
     }
@@ -1253,7 +1266,7 @@ mod tests {
                     if invalid && i == 1 {
                         "bad".into()
                     } else {
-                        e.md5.clone()
+                        e.hash.clone()
                     }
                 ])
                 .unwrap();
@@ -1276,7 +1289,7 @@ mod tests {
                     )
                     .unwrap()
                     .with_timezone(&Utc),
-                    md5: "abcd".repeat(8),
+                    hash: "abcd".repeat(8),
                 },
                 FileEntry {
                     relative_path: "empty".into(),
@@ -1287,7 +1300,7 @@ mod tests {
                     )
                     .unwrap()
                     .with_timezone(&Utc),
-                    md5: String::new(),
+                    hash: String::new(),
                 },
             ],
         );
@@ -1311,13 +1324,13 @@ mod tests {
                 .conn
                 .query_row::<u32, _, _>("PRAGMA user_version", [], |r| r.get(0))
                 .unwrap(),
-            3
+            entry_codec::DATABASE_VERSION
         );
         assert_eq!(
             store
                 .conn
                 .query_row::<String, _, _>(
-                    "SELECT typeof(md5) FROM entries WHERE path='old-file'",
+                    "SELECT typeof(hash) FROM entries WHERE path='old-file'",
                     [],
                     |r| r.get(0)
                 )
@@ -1328,7 +1341,7 @@ mod tests {
             store
                 .conn
                 .query_row::<usize, _, _>(
-                    "SELECT length(md5) FROM entries WHERE path='old-file'",
+                    "SELECT length(hash) FROM entries WHERE path='old-file'",
                     [],
                     |r| r.get(0)
                 )
@@ -1350,6 +1363,209 @@ mod tests {
     }
 
     #[test]
+    fn v3_md5_history_survives_upgrade_and_blake3_capture_roundtrip() {
+        let (temp, mut store) = store();
+        let config = new_config("C:/offline-history", &[]);
+        let old_entry = FileEntry {
+            relative_path: "a.txt".into(),
+            kind: EntryKind::File,
+            size: 3,
+            modified_time: Utc::now(),
+            hash: "900150983cd24fb0d6963f7d28e17f72".into(),
+        };
+        let mut old = diff::test_snapshot("md5-old", vec![old_entry]);
+        old.directory_id = config.id.clone();
+        store.commit_scan(&config, &old, true, 0, true).unwrap();
+        let mut later = old.clone();
+        later.id = "md5-later".into();
+        later.created_time += Duration::seconds(1);
+        store.commit_scan(&config, &later, true, 0, false).unwrap();
+        let header_before: String = store
+            .conn
+            .query_row("SELECT header FROM states WHERE id='md5-old'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        store.conn.execute_batch("ALTER TABLE entries RENAME TO entries_new;
+            CREATE TABLE entries(state_id TEXT NOT NULL REFERENCES states(id) ON DELETE CASCADE,
+              path TEXT NOT NULL,kind TEXT NOT NULL,size INTEGER NOT NULL CHECK(size>=0),
+              modified_seconds INTEGER NOT NULL,modified_nanos INTEGER NOT NULL,
+              md5 BLOB NOT NULL CHECK(length(md5) IN (0,16)),PRIMARY KEY(state_id,path)) WITHOUT ROWID;
+            INSERT INTO entries SELECT * FROM entries_new; DROP TABLE entries_new; PRAGMA user_version=3;").unwrap();
+        drop(store);
+        let mut store = Store::open(temp.path()).unwrap();
+        assert_eq!(store.snapshot("md5-old").unwrap().files, old.files);
+        assert_eq!(store.history(&config.id).unwrap().len(), 2);
+        let header_after: String = store
+            .conn
+            .query_row("SELECT header FROM states WHERE id='md5-old'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(header_before, header_after);
+        assert_eq!(
+            store
+                .compare_states("md5-old", "md5-later", false, &[])
+                .unwrap()
+                .row_count,
+            0
+        );
+        let mut new = later.clone();
+        new.id = "blake3-base".into();
+        new.schema_version = CURRENT_SCHEMA_VERSION;
+        new.created_time += Duration::seconds(1);
+        new.files[0].hash = blake3::hash(b"abc").to_hex().to_string();
+        assert!(!store.scan_hash_matches("md5-old", &new).unwrap());
+        assert!(store
+            .compare_scan(
+                "md5-old",
+                &new,
+                false,
+                &[],
+                Arc::new(AtomicBool::new(false))
+            )
+            .err()
+            .unwrap()
+            .contains("不能比较"));
+        store.commit_scan(&config, &new, true, 0, false).unwrap();
+        assert_eq!(
+            store.config(&config.id).unwrap().baseline_id.as_deref(),
+            Some("blake3-base")
+        );
+        let mut next = new.clone();
+        next.id = "blake3-new".into();
+        next.created_time += Duration::seconds(1);
+        next.files[0].hash = blake3::hash(b"def").to_hex().to_string();
+        store.commit_scan(&config, &next, true, 1, false).unwrap();
+        assert_eq!(
+            store
+                .compare_states("blake3-base", "blake3-new", false, &[])
+                .unwrap()
+                .summary
+                .counts
+                .modified,
+            1
+        );
+        assert!(diff::compare(&old, &new, false, &[])
+            .unwrap_err()
+            .contains("不能比较"));
+        let hash_size: usize = store
+            .conn
+            .query_row(
+                "SELECT length(hash) FROM entries WHERE state_id='blake3-base'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(hash_size, 32);
+        let out = tempfile::tempdir().unwrap();
+        let path = out.path().join("mixed.json");
+        store.export_archive(Some(&config.id), &[], &path).unwrap();
+        let archive = read_archive(&path).unwrap();
+        assert_eq!(archive.schema_version, 3);
+        assert_eq!(archive.snapshots.len(), 4);
+        let target = tempfile::tempdir().unwrap();
+        let mut imported = Store::open(target.path()).unwrap();
+        imported.import_archive(&archive).unwrap();
+        assert_eq!(imported.snapshot("md5-old").unwrap().files, old.files);
+        assert_eq!(imported.snapshot("blake3-base").unwrap().files, new.files);
+        assert_eq!(imported.import_archive(&archive).unwrap().duplicates, 4);
+        drop(store);
+        let mut reopened = Store::open(temp.path()).unwrap();
+        assert_eq!(reopened.snapshot("md5-old").unwrap().files, old.files);
+        assert_eq!(reopened.snapshot("blake3-new").unwrap().files, next.files);
+        let preview = reopened.retention_preview(&config.id, 1).unwrap();
+        assert_eq!(preview.len(), 1);
+        assert_eq!(preview[0].id, "blake3-base");
+        assert_eq!(
+            reopened
+                .update_settings(&config.id, vec![], vec![], 1)
+                .unwrap(),
+            1
+        );
+        assert_eq!(reopened.history(&config.id).unwrap().len(), 3);
+        next.id = "blake3-final".into();
+        next.created_time += Duration::seconds(1);
+        let config = reopened.config(&config.id).unwrap();
+        assert_eq!(
+            reopened
+                .commit_scan(&config, &next, true, 0, false)
+                .unwrap(),
+            1
+        );
+        assert_eq!(reopened.history(&config.id).unwrap().len(), 3);
+        assert_eq!(reopened.snapshot("md5-old").unwrap().files, old.files);
+        assert_eq!(reopened.snapshot("md5-later").unwrap().files, later.files);
+    }
+
+    #[test]
+    fn first_blake3_capture_with_latest_retention_preserves_md5_history() {
+        let (_temp, mut store) = store();
+        let mut config = new_config("C:/offline-transition", &[]);
+        config.retention = 1;
+        let mut old = diff::test_snapshot(
+            "old-md5",
+            vec![FileEntry {
+                relative_path: "a.txt".into(),
+                kind: EntryKind::File,
+                size: 3,
+                modified_time: Utc::now(),
+                hash: "900150983cd24fb0d6963f7d28e17f72".into(),
+            }],
+        );
+        old.directory_id = config.id.clone();
+        store.commit_scan(&config, &old, true, 0, true).unwrap();
+        let mut new = old.clone();
+        new.id = "blake3-first".into();
+        new.schema_version = CURRENT_SCHEMA_VERSION;
+        new.created_time += Duration::seconds(1);
+        new.files[0].hash = blake3::hash(b"abc").to_hex().to_string();
+        assert_eq!(store.commit_scan(&config, &new, true, 0, false).unwrap(), 0);
+        assert_eq!(store.history(&config.id).unwrap().len(), 2);
+        assert!(store.retention_preview(&config.id, 1).unwrap().is_empty());
+        new.id = "blake3-next".into();
+        new.created_time += Duration::seconds(1);
+        assert_eq!(store.commit_scan(&config, &new, true, 0, false).unwrap(), 1);
+        assert_eq!(store.history(&config.id).unwrap().len(), 2);
+        assert_eq!(store.snapshot("old-md5").unwrap().files, old.files);
+    }
+
+    #[test]
+    fn public_hash_schema_rejects_wrong_algorithm_length_and_preserves_legacy_json() {
+        let mut new = diff::test_snapshot(
+            "new",
+            vec![FileEntry {
+                relative_path: "a".into(),
+                kind: EntryKind::File,
+                size: 3,
+                modified_time: Utc::now(),
+                hash: blake3::hash(b"abc").to_hex().to_string(),
+            }],
+        );
+        prepare_snapshot(&mut new).unwrap();
+        let mut invalid = new.clone();
+        invalid.files[0].hash = "a".repeat(32);
+        assert!(prepare_snapshot(&mut invalid).is_err());
+        invalid = new.clone();
+        invalid.files[0].hash = "z".repeat(64);
+        assert!(prepare_snapshot(&mut invalid).is_err());
+        invalid = new.clone();
+        invalid.schema_version = 2;
+        assert!(prepare_snapshot(&mut invalid).is_err());
+        let mut json = serde_json::to_value(&new).unwrap();
+        json["schema_version"] = 2.into();
+        json["files"][0].as_object_mut().unwrap().remove("hash");
+        json["files"][0]["md5"] = "900150983cd24fb0d6963f7d28e17f72".into();
+        let mut old: Snapshot = serde_json::from_value(json).unwrap();
+        prepare_snapshot(&mut old).unwrap();
+        assert_eq!(old.hash_algorithm(), "md5");
+        assert_eq!(old.files[0].hash, "900150983cd24fb0d6963f7d28e17f72");
+        assert!(serde_json::to_value(&new).unwrap()["files"][0]
+            .get("md5")
+            .is_none());
+    }
+
+    #[test]
     fn failed_sqlite_upgrade_rolls_back_and_newer_versions_are_rejected() {
         let (temp, mut store) = store();
         let config = new_config("C:/folder", &[]);
@@ -1358,7 +1574,7 @@ mod tests {
             kind: EntryKind::File,
             size: 42,
             modified_time: Utc::now(),
-            md5: "a".repeat(32),
+            hash: "a".repeat(32),
         };
         let mut other = entry.clone();
         other.relative_path = "b".into();

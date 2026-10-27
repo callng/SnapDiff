@@ -3,25 +3,25 @@ use crate::models::{EntryKind, FileEntry};
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, Row};
 
-pub const DATABASE_VERSION: u32 = 3;
-pub const COLUMNS: &str = "path,kind,size,modified_seconds,modified_nanos,md5";
+pub const DATABASE_VERSION: u32 = 4;
+pub const COLUMNS: &str = "path,kind,size,modified_seconds,modified_nanos,hash";
 pub const CREATE_ENTRIES: &str = "CREATE TABLE entries(
     state_id TEXT NOT NULL REFERENCES states(id) ON DELETE CASCADE,
     path TEXT NOT NULL, kind TEXT NOT NULL,
     size INTEGER NOT NULL CHECK(size>=0),
     modified_seconds INTEGER NOT NULL,
     modified_nanos INTEGER NOT NULL CHECK(modified_nanos BETWEEN 0 AND 1999999999),
-    md5 BLOB NOT NULL CHECK(length(md5) IN (0,16)),
+    hash BLOB NOT NULL CHECK(length(hash) IN (0,16,32)),
     PRIMARY KEY(state_id,path)) WITHOUT ROWID";
 
 pub fn hash_bytes(hash: &str) -> Result<Vec<u8>, String> {
     if hash.is_empty() {
         return Ok(vec![]);
     }
-    if hash.len() != 32 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err("无效 MD5 数据".into());
+    if !matches!(hash.len(), 32 | 64) || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("无效摘要数据".into());
     }
-    (0..32)
+    (0..hash.len())
         .step_by(2)
         .map(|i| u8::from_str_radix(&hash[i..i + 2], 16).map_err(|e| e.to_string()))
         .collect()
@@ -46,12 +46,12 @@ pub fn read_entry(row: &Row<'_>, offset: usize) -> rusqlite::Result<FileEntry> {
             std::io::Error::other("无效修改时间").into(),
         )
     })?;
-    let hash: Vec<u8> = row.get(offset + 5)?;
-    let mut md5 = String::with_capacity(hash.len() * 2);
+    let bytes: Vec<u8> = row.get(offset + 5)?;
+    let mut hash = String::with_capacity(bytes.len() * 2);
     const HEX: &[u8; 16] = b"0123456789abcdef";
-    for byte in hash {
-        md5.push(HEX[(byte >> 4) as usize] as char);
-        md5.push(HEX[(byte & 15) as usize] as char);
+    for byte in bytes {
+        hash.push(HEX[(byte >> 4) as usize] as char);
+        hash.push(HEX[(byte & 15) as usize] as char);
     }
     Ok(FileEntry {
         relative_path: row.get(offset)?,
@@ -62,7 +62,7 @@ pub fn read_entry(row: &Row<'_>, offset: usize) -> rusqlite::Result<FileEntry> {
         },
         size: row.get::<_, u64>(offset + 2)?,
         modified_time: time,
-        md5,
+        hash,
     })
 }
 
@@ -88,7 +88,7 @@ pub fn insert_entries(
                 size,
                 entry.modified_time.timestamp(),
                 entry.modified_time.timestamp_subsec_nanos(),
-                hash_bytes(&entry.md5)?
+                hash_bytes(&entry.hash)?
             ])
             .map_err(|e| e.to_string())?;
     }
@@ -96,6 +96,9 @@ pub fn insert_entries(
 }
 
 pub fn migrate(conn: &mut Connection) -> Result<(), String> {
+    let version: u32 = conn
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .map_err(|e| e.to_string())?;
     let transaction = conn.transaction().map_err(|e| e.to_string())?;
     let exists: bool = transaction
         .query_row(
@@ -112,7 +115,10 @@ pub fn migrate(conn: &mut Connection) -> Result<(), String> {
     transaction
         .execute_batch(CREATE_ENTRIES)
         .map_err(|e| e.to_string())?;
-    if exists {
+    if exists && version >= 3 {
+        // Preserve legacy digest bytes and headers exactly; never rehash sources.
+        transaction.execute_batch("INSERT INTO entries(state_id,path,kind,size,modified_seconds,modified_nanos,hash) SELECT state_id,path,kind,size,modified_seconds,modified_nanos,md5 FROM entries_v2; DROP TABLE entries_v2;").map_err(|e| e.to_string())?;
+    } else if exists {
         let mut reader = transaction
             .prepare("SELECT state_id,path,kind,size,modified_time,md5 FROM entries_v2")
             .map_err(|e| e.to_string())?;

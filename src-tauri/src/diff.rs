@@ -49,6 +49,7 @@ pub fn compare_cancellable(
             Ok(())
         }
     };
+    old.ensure_comparable(new)?;
     checkpoint()?;
     if old.directory_id != new.directory_id {
         return Err("只能比较同一个目录的状态".into());
@@ -96,7 +97,7 @@ pub fn compare_cancellable(
         checkpoint()?;
         match old_map.get(path) {
             None => added.push(*entry),
-            Some(previous) if previous.kind != entry.kind || previous.md5 != entry.md5 => rows
+            Some(previous) if previous.kind != entry.kind || previous.hash != entry.hash => rows
                 .push(row(
                     DiffStatus::Modified,
                     Some(previous),
@@ -130,7 +131,7 @@ pub fn compare_cancellable(
         checkpoint()?;
         if entry.kind == EntryKind::File {
             added_by_hash
-                .entry((entry.size, &entry.md5))
+                .entry((entry.size, &entry.hash))
                 .or_default()
                 .push(entry);
         }
@@ -139,7 +140,7 @@ pub fn compare_cancellable(
         checkpoint()?;
         if entry.kind == EntryKind::File {
             deleted_by_hash
-                .entry((entry.size, &entry.md5))
+                .entry((entry.size, &entry.hash))
                 .or_default()
                 .push(entry);
         }
@@ -319,14 +320,24 @@ pub fn report(comparison: &Comparison, query: &DiffQuery) -> String {
         text.push_str(&format!("\n[{}] {}\n", row.status.label(), row.path));
         if let Some(old) = &row.old {
             text.push_str(&format!(
-                "  旧: {} | {:?} | {} bytes | {} | MD5 {}\n",
-                old.relative_path, old.kind, old.size, old.modified_time, old.md5
+                "  旧: {} | {:?} | {} bytes | {} | {} {}\n",
+                old.relative_path,
+                old.kind,
+                old.size,
+                old.modified_time,
+                old.hash_label(),
+                old.hash
             ));
         }
         if let Some(new) = &row.new {
             text.push_str(&format!(
-                "  新: {} | {:?} | {} bytes | {} | MD5 {}\n",
-                new.relative_path, new.kind, new.size, new.modified_time, new.md5
+                "  新: {} | {:?} | {} bytes | {} | {} {}\n",
+                new.relative_path,
+                new.kind,
+                new.size,
+                new.modified_time,
+                new.hash_label(),
+                new.hash
             ));
         }
     }
@@ -353,7 +364,11 @@ pub fn paths(comparison: &Comparison, query: &DiffQuery, absolute: bool) -> Stri
 #[cfg(test)]
 pub(crate) fn test_snapshot(id: &str, entries: Vec<FileEntry>) -> Snapshot {
     let mut snapshot = Snapshot {
-        schema_version: 2,
+        schema_version: if entries.iter().any(|e| e.hash.len() == 64) {
+            CURRENT_SCHEMA_VERSION
+        } else {
+            2
+        },
         id: id.into(),
         directory_id: "folder".into(),
         name: "Folder".into(),
@@ -393,7 +408,7 @@ mod tests {
             kind: EntryKind::File,
             size: 10,
             modified_time: chrono::Utc::now(),
-            md5: hash.repeat(32),
+            hash: hash.repeat(32),
         }
     }
     #[test]

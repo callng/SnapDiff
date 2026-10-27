@@ -4,9 +4,9 @@
     { id: 'latest', created_time: '2026-10-12T02:26:48Z', remark: '调整配置后', file_count: 14283, directory_count: 841, total_size: 76450488320 },
     { id: 'before', created_time: '2026-10-11T06:17:32Z', remark: '新增插件后', file_count: 14265, directory_count: 839, total_size: 76450002320 },
     { id: 'clean', created_time: '2026-10-10T00:32:19Z', remark: '初始状态', file_count: 14260, directory_count: 837, total_size: 76448002320 },
-  ].map(node => ({ ...node, directory_id: 'demo', directory_entries_complete: true, scan_started_time: node.created_time }));
+  ].map(node => ({ ...node, hash_algorithm: 'blake3', directory_id: 'demo', directory_entries_complete: true, scan_started_time: node.created_time }));
   const directory = { id: 'demo', name: 'Workspace', root_path: 'D:\\Projects\\Workspace', root_key: 'd:/projects/workspace', baseline_id: 'clean', current_id: 'latest', ignore_patterns: ['*.log', 'cache/'], focus_patterns: ['/bin/plugin.dll'], retention: 0, history_count: 3, latest: nodes[0], current: nodes[0], current_types: { '.dll': { count: 129, size: 24450488320 }, '.pak': { count: 246, size: 51440000000 }, '.ini': { count: 92, size: 3200000 }, '.json': { count: 784, size: 73600000 } }, available: true };
-  const file = (path, size, hash) => ({ relative_path: path, kind: 'file', size, md5: hash.repeat(32), modified_time: nodes[0].created_time });
+  const file = (path, size, hash) => ({ relative_path: path, kind: 'file', size, hash: hash.repeat(64), modified_time: nodes[0].created_time });
   const rows = [
     { path: 'bin/plugin.dll', status: 'modified', old: file('bin/plugin.dll', 102400, 'a'), new: file('bin/plugin.dll', 155648, 'b'), size_delta: 53248, focused: true },
     { path: 'config/settings.ini', status: 'modified', old: file('config/settings.ini', 1421, 'a'), new: file('config/settings.ini', 1582, 'c'), size_delta: 161, focused: false },
@@ -15,7 +15,7 @@
     { path: 'old/helper.dll', status: 'deleted', old: file('old/helper.dll', 18432, 'e'), new: null, size_delta: -18432, focused: false },
     { path: 'assets/new/settings.json', status: 'moved', old: file('assets/settings.json', 1900, 'f'), new: file('assets/new/settings.json', 1900, 'f'), size_delta: 0, focused: false },
     { path: 'cache-marker.dat', status: 'metadata', old: file('cache-marker.dat', 512, 'a'), new: file('cache-marker.dat', 512, 'a'), size_delta: 0, focused: false },
-    { path: 'empty-folder', status: 'added', old: null, new: { relative_path: 'empty-folder', kind: 'directory', size: 0, md5: '', modified_time: nodes[0].created_time }, size_delta: 0, focused: false },
+    { path: 'empty-folder', status: 'added', old: null, new: { relative_path: 'empty-folder', kind: 'directory', size: 0, hash: '', modified_time: nodes[0].created_time }, size_delta: 0, focused: false },
   ];
   const activity = Array.from({ length: 120 }, (_, i) => {
     const day = new Date('2026-10-12T00:00:00'); day.setDate(day.getDate() - 119 + i);
@@ -52,7 +52,7 @@
         }
         case 'preview_retention': return clone(args.retention ? nodes.slice(args.retention) : []);
         case 'update_settings': directory.ignore_patterns = args.ignorePatterns; directory.focus_patterns = args.focusPatterns; directory.retention = args.retention; return 0;
-        case 'get_report': return { text: 'SnapDiff 目录差异报告（界面预览）\n新增 3 · 删除 1 · 修改 2 · 疑似移动 1\n\nbin/plugin.dll\n旧 MD5 ' + 'a'.repeat(32) + '\n新 MD5 ' + 'b'.repeat(32), bytes: 180, truncated: false };
+        case 'get_report': return { text: 'SnapDiff 目录差异报告（界面预览）\n新增 3 · 删除 1 · 修改 2 · 疑似移动 1\n\nbin/plugin.dll\n旧 BLAKE3 ' + 'a'.repeat(64) + '\n新 BLAKE3 ' + 'b'.repeat(64), bytes: 180, truncated: false };
         case 'scan_directory': throw new Error('这是演示数据预览；实际扫描请运行 Tauri 应用。');
         default: return;
       }

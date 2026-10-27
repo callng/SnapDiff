@@ -62,13 +62,17 @@ SD.results = (() => {
     const root = s.directory.root_path.replace(/[\\/]$/, '');
     return root + (/^[a-z]:/i.test(root) || root.includes('\\') ? '\\' + path.replace(/\//g, '\\') : '/' + path);
   }
+  function hashText(entry) {
+    if (!entry?.hash) return '';
+    return (entry.hash.length === 32 ? 'MD5（历史）' : 'BLAKE3') + ' · ' + entry.hash;
+  }
   function detail(row) {
     const fields = [
       ['相对路径', row.old?.relative_path, row.new?.relative_path],
       ['类型', row.old && kinds[row.old.kind || 'file'], row.new && kinds[row.new.kind || 'file']],
       ['文件大小', row.old && bytes(row.old.size), row.new && bytes(row.new.size)],
       ['修改时间', row.old && date(row.old.modified_time), row.new && date(row.new.modified_time)],
-      [kindOf(row) === 'symlink' ? '链接目标路径 MD5' : 'MD5', row.old?.md5, row.new?.md5],
+      [kindOf(row) === 'symlink' ? '链接目标摘要' : '文件摘要', hashText(row.old), hashText(row.new)],
     ];
     return '<div class="file-details"><table><thead><tr><th>属性</th><th>旧状态</th><th>新状态</th></tr></thead><tbody>' +
       fields.map(([label, old, next]) => '<tr class="' + (old !== next ? 'changed-field' : '') + '"><th>' + label + '</th><td>' + esc(old || '—') + '</td><td>' + esc(next || '—') + '</td></tr>').join('') +
